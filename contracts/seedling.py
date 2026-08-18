@@ -4,18 +4,21 @@
 # SEEDLING — reusable latent-public-goods discovery, lineage-attribution,
 # and progressive retroactive-funding primitive.
 #
-# STAGE 1 SCOPE: storage scaffolding + protocol control only.
-#   - Full on-chain storage model for all 12 core records (declared below).
-#   - Domain vocabulary (lifecycle, types, evidence categories, tiers,
-#     reason codes, lineage relationships, appeal grounds/decisions).
-#   - Constructor + owner-gated pause/unpause + get_protocol_info().
-# Candidate/policy/evidence/adjudication/funding/appeal methods arrive in
-# later stages (2-10). This file is a valid, deployable gl.Contract so the
-# repository stays functional after every stage.
+# STAGES IMPLEMENTED SO FAR:
+#   Stage 1 — storage scaffolding + protocol control.
+#   Stage 2 — candidate lifecycle registration + reusable, versioned
+#             ObservationPolicy and FundingPolicy primitives.
+#
+# Stage 2 deliberately does NOT implement: candidate evidence submission,
+# latent-evidence freezing, latent-value adjudication, contribution lineage,
+# checkpoints, public-value adjudication, funding calculation, or appeals.
+# Those belong to Stages 3-10. The file stays a valid, deployable gl.Contract
+# so the repository remains functional after every stage.
 
 from genlayer import *
 
 import json
+import time
 
 
 # ---------------------------------------------------------------------------
@@ -166,9 +169,13 @@ CHECKPOINT_STATUSES = [
 ]
 APPEAL_STATUSES = ["OPEN", "EVALUATING", "RESOLVED"]
 
+# Reusable-policy lifecycle. Historical version records are immutable; only
+# this operational flag (tracked in a dedicated status map) ever changes.
+POLICY_STATUSES = ["ACTIVE", "INACTIVE"]
+
 # ---------------------------------------------------------------------------
-# Deterministic bounds (used by later stages; declared here as the single
-# source of truth for the scaffold and exposed via get_protocol_info()).
+# Deterministic bounds — single source of truth for the scaffold, exposed via
+# get_protocol_info() and enforced by Stage 2 validation.
 # ---------------------------------------------------------------------------
 BPS_DENOMINATOR = 10000
 MAX_EVIDENCE_PER_CANDIDATE = 64
@@ -178,6 +185,16 @@ MAX_LINEAGE_EDGES = 128
 MAX_CHECKPOINTS_PER_CANDIDATE = 48
 MIN_CHECKPOINT_INTERVAL = 86400          # 1 day
 MAX_CHECKPOINT_INTERVAL = 157680000      # ~5 years
+
+# String / collection bounds (Stage 2)
+MAX_NAME_LEN = 120
+MAX_DESCRIPTION_LEN = 2000
+MAX_URL_LEN = 400
+MAX_ORIGIN_DATE_LEN = 40
+MAX_POLICY_NAME_LEN = 120
+MAX_RULE_LEN = 2000
+MAX_INDEPENDENT_SOURCES = 100
+MAX_LIST_LIMIT = 50                      # pagination page-size ceiling for views
 
 
 class Seedling(gl.Contract):
@@ -223,6 +240,14 @@ class Seedling(gl.Contract):
     checkpoint_evidence_ids: TreeMap[str, str]      # checkpoint_id -> [evidence_id]
     checkpoint_verdict_ids: TreeMap[str, str]       # checkpoint_id -> [impact_verdict_id] (append-only)
 
+    # -- policy enumeration, version history, and operational status (Stage 2) --
+    observation_policy_index: TreeMap[str, str]         # ordinal -> policy_id (every version)
+    funding_policy_index: TreeMap[str, str]             # ordinal -> funding_policy_id (every version)
+    observation_policy_family_index: TreeMap[str, str]  # family_id -> [policy_id] (version order)
+    funding_policy_family_index: TreeMap[str, str]      # family_id -> [funding_policy_id]
+    observation_policy_status: TreeMap[str, str]        # policy_id -> ACTIVE|INACTIVE
+    funding_policy_status: TreeMap[str, str]            # funding_policy_id -> ACTIVE|INACTIVE
+
     def __init__(self):
         self.config["owner"] = gl.message.sender_address.as_hex
         self.config["paused"] = "0"
@@ -240,12 +265,155 @@ class Seedling(gl.Contract):
         self.lineage_verdict_count = u256(0)
         self.appeal_count = u256(0)
 
-    # -- internal guards --
+    # ======================================================================
+    # Internal guards / helpers
+    # ======================================================================
     def _require_owner(self):
         if gl.message.sender_address.as_hex != self.config["owner"]:
             raise gl.vm.UserError("EXPECTED: only owner can call this")
 
-    # -- protocol control --
+    def _require_not_paused(self):
+        if self.config["paused"] == "1":
+            raise gl.vm.UserError("EXPECTED: protocol is paused")
+
+    def _now(self) -> int:
+        # GenVM provides a consensus-deterministic wall clock; same verified
+        # pattern used by the deployed sibling contracts.
+        return int(time.time())
+
+    def _validate_http_url(self, url: str, field: str):
+        if not url or len(url) > MAX_URL_LEN:
+            raise gl.vm.UserError(f"EXPECTED: {field} must be 1-{MAX_URL_LEN} characters")
+        lo = url.lower()
+        if not (lo.startswith("http://") or lo.startswith("https://")):
+            raise gl.vm.UserError(f"EXPECTED: {field} must be an http:// or https:// URL")
+        for ch in url:
+            if ch.isspace():
+                raise gl.vm.UserError(f"EXPECTED: {field} must not contain whitespace")
+        rest = url.split("://", 1)[1]
+        host = rest.split("/", 1)[0]
+        if not host or "." not in host:
+            raise gl.vm.UserError(f"EXPECTED: {field} must include a valid host")
+
+    def _require_active_observation_policy(self, pid: str):
+        if not pid or pid not in self.observation_policies:
+            raise gl.vm.UserError("EXPECTED: observation_policy_id does not exist")
+        if self.observation_policy_status[pid] != "ACTIVE":
+            raise gl.vm.UserError("EXPECTED: observation policy is not active")
+
+    def _require_active_funding_policy(self, fid: str):
+        if not fid or fid not in self.funding_policies:
+            raise gl.vm.UserError("EXPECTED: funding_policy_id does not exist")
+        if self.funding_policy_status[fid] != "ACTIVE":
+            raise gl.vm.UserError("EXPECTED: funding policy is not active")
+
+    def _validated_observation_payload(
+        self,
+        name: str,
+        candidate_types: list[str],
+        minimum_evidence_categories: int,
+        minimum_independent_sources: int,
+        latent_rules: str,
+        impact_rules: str,
+        lineage_rules: str,
+        gaming_rules: str,
+        substitute_rules: str,
+        checkpoint_interval: int,
+    ) -> dict:
+        if not name or len(name) > MAX_POLICY_NAME_LEN:
+            raise gl.vm.UserError(f"EXPECTED: name must be 1-{MAX_POLICY_NAME_LEN} characters")
+        if not candidate_types:
+            raise gl.vm.UserError("EXPECTED: at least one candidate_type is required")
+        if len(candidate_types) > len(CANDIDATE_TYPES):
+            raise gl.vm.UserError("EXPECTED: too many candidate_types")
+        seen = []
+        for t in candidate_types:
+            if t not in CANDIDATE_TYPES:
+                raise gl.vm.UserError(f"EXPECTED: invalid candidate_type '{t}'")
+            if t in seen:
+                raise gl.vm.UserError(f"EXPECTED: duplicate candidate_type '{t}'")
+            seen.append(t)
+        if minimum_evidence_categories < 0 or minimum_evidence_categories > len(EVIDENCE_CATEGORIES):
+            raise gl.vm.UserError(
+                f"EXPECTED: minimum_evidence_categories must be 0-{len(EVIDENCE_CATEGORIES)}"
+            )
+        if minimum_independent_sources < 1 or minimum_independent_sources > MAX_INDEPENDENT_SOURCES:
+            raise gl.vm.UserError(
+                f"EXPECTED: minimum_independent_sources must be 1-{MAX_INDEPENDENT_SOURCES}"
+            )
+        for label, rule in (
+            ("latent_rules", latent_rules),
+            ("impact_rules", impact_rules),
+            ("lineage_rules", lineage_rules),
+            ("gaming_rules", gaming_rules),
+            ("substitute_rules", substitute_rules),
+        ):
+            if len(rule) > MAX_RULE_LEN:
+                raise gl.vm.UserError(f"EXPECTED: {label} must be at most {MAX_RULE_LEN} characters")
+        if checkpoint_interval < MIN_CHECKPOINT_INTERVAL or checkpoint_interval > MAX_CHECKPOINT_INTERVAL:
+            raise gl.vm.UserError(
+                f"EXPECTED: checkpoint_interval must be {MIN_CHECKPOINT_INTERVAL}-{MAX_CHECKPOINT_INTERVAL} seconds"
+            )
+        return {
+            "name": name,
+            "candidate_types": candidate_types,
+            "minimum_evidence_categories": minimum_evidence_categories,
+            "minimum_independent_sources": minimum_independent_sources,
+            "latent_rules": latent_rules,
+            "impact_rules": impact_rules,
+            "lineage_rules": lineage_rules,
+            "gaming_rules": gaming_rules,
+            "substitute_rules": substitute_rules,
+            "checkpoint_interval": checkpoint_interval,
+        }
+
+    def _validated_funding_payload(
+        self,
+        name: str,
+        latent_cap_bps: int,
+        watching_cap_bps: int,
+        emerging_cap_bps: int,
+        material_cap_bps: int,
+        systemic_cap_bps: int,
+        minimum_public_value_bps: int,
+        maximum_gaming_risk_bps: int,
+        minimum_attribution_confidence_bps: int,
+    ) -> dict:
+        if not name or len(name) > MAX_POLICY_NAME_LEN:
+            raise gl.vm.UserError(f"EXPECTED: name must be 1-{MAX_POLICY_NAME_LEN} characters")
+        for label, v in (
+            ("latent_cap_bps", latent_cap_bps),
+            ("watching_cap_bps", watching_cap_bps),
+            ("emerging_cap_bps", emerging_cap_bps),
+            ("material_cap_bps", material_cap_bps),
+            ("systemic_cap_bps", systemic_cap_bps),
+            ("minimum_public_value_bps", minimum_public_value_bps),
+            ("maximum_gaming_risk_bps", maximum_gaming_risk_bps),
+            ("minimum_attribution_confidence_bps", minimum_attribution_confidence_bps),
+        ):
+            if v < 0 or v > BPS_DENOMINATOR:
+                raise gl.vm.UserError(f"EXPECTED: {label} must be 0-{BPS_DENOMINATOR}")
+        if not (latent_cap_bps <= watching_cap_bps <= emerging_cap_bps
+                <= material_cap_bps <= systemic_cap_bps):
+            raise gl.vm.UserError(
+                "EXPECTED: caps must be monotonic: "
+                "latent <= watching <= emerging <= material <= systemic"
+            )
+        return {
+            "name": name,
+            "latent_cap_bps": latent_cap_bps,
+            "watching_cap_bps": watching_cap_bps,
+            "emerging_cap_bps": emerging_cap_bps,
+            "material_cap_bps": material_cap_bps,
+            "systemic_cap_bps": systemic_cap_bps,
+            "minimum_public_value_bps": minimum_public_value_bps,
+            "maximum_gaming_risk_bps": maximum_gaming_risk_bps,
+            "minimum_attribution_confidence_bps": minimum_attribution_confidence_bps,
+        }
+
+    # ======================================================================
+    # Protocol control (owner-gated)
+    # ======================================================================
     @gl.public.write
     def pause(self) -> str:
         self._require_owner()
@@ -257,6 +425,365 @@ class Seedling(gl.Contract):
         self._require_owner()
         self.config["paused"] = "0"
         return "unpaused"
+
+    # ======================================================================
+    # ObservationPolicy — reusable, versioned observation rules (spec ss.11)
+    # ======================================================================
+    @gl.public.write
+    def create_observation_policy(
+        self,
+        name: str,
+        candidate_types: list[str],
+        minimum_evidence_categories: int,
+        minimum_independent_sources: int,
+        latent_rules: str,
+        impact_rules: str,
+        lineage_rules: str,
+        gaming_rules: str,
+        substitute_rules: str,
+        checkpoint_interval: int,
+    ) -> str:
+        self._require_not_paused()
+        payload = self._validated_observation_payload(
+            name, candidate_types, minimum_evidence_categories, minimum_independent_sources,
+            latent_rules, impact_rules, lineage_rules, gaming_rules, substitute_rules,
+            checkpoint_interval,
+        )
+        n = int(self.observation_policy_count) + 1
+        self.observation_policy_count = u256(n)
+        pid = str(n)
+        record = {
+            "policy_id": pid,
+            "family_id": pid,           # version 1 seeds its own family
+            "version": 1,
+            "creator": gl.message.sender_address.as_hex,
+            "created_at": self._now(),
+        }
+        record.update(payload)
+        self.observation_policies[pid] = json.dumps(record)
+        self.observation_policy_status[pid] = "ACTIVE"
+        self.observation_policy_index[str(n - 1)] = pid
+        self.observation_policy_family_index[pid] = json.dumps([pid])
+        return pid
+
+    @gl.public.write
+    def version_observation_policy(
+        self,
+        policy_id: str,
+        name: str,
+        candidate_types: list[str],
+        minimum_evidence_categories: int,
+        minimum_independent_sources: int,
+        latent_rules: str,
+        impact_rules: str,
+        lineage_rules: str,
+        gaming_rules: str,
+        substitute_rules: str,
+        checkpoint_interval: int,
+    ) -> str:
+        self._require_not_paused()
+        if not policy_id or policy_id not in self.observation_policies:
+            raise gl.vm.UserError("EXPECTED: observation policy does not exist")
+        prev = json.loads(self.observation_policies[policy_id])
+        caller = gl.message.sender_address.as_hex
+        if caller != prev["creator"]:
+            raise gl.vm.UserError("EXPECTED: only the policy creator can version it")
+        family_id = prev["family_id"]
+        versions = json.loads(self.observation_policy_family_index[family_id])
+        if versions[-1] != policy_id:
+            raise gl.vm.UserError("EXPECTED: can only version from the latest version of the family")
+        payload = self._validated_observation_payload(
+            name, candidate_types, minimum_evidence_categories, minimum_independent_sources,
+            latent_rules, impact_rules, lineage_rules, gaming_rules, substitute_rules,
+            checkpoint_interval,
+        )
+        n = int(self.observation_policy_count) + 1
+        self.observation_policy_count = u256(n)
+        new_pid = str(n)
+        record = {
+            "policy_id": new_pid,
+            "family_id": family_id,
+            "version": int(prev["version"]) + 1,
+            "creator": caller,
+            "created_at": self._now(),
+        }
+        record.update(payload)
+        # Historical record is written once and never mutated. Only the
+        # separate status map flips, so version history stays immutable.
+        self.observation_policies[new_pid] = json.dumps(record)
+        self.observation_policy_status[new_pid] = "ACTIVE"
+        self.observation_policy_status[policy_id] = "INACTIVE"   # supersede previous
+        self.observation_policy_index[str(n - 1)] = new_pid
+        versions.append(new_pid)
+        self.observation_policy_family_index[family_id] = json.dumps(versions)
+        return new_pid
+
+    @gl.public.write
+    def set_observation_policy_status(self, policy_id: str, active: bool) -> str:
+        self._require_not_paused()
+        if not policy_id or policy_id not in self.observation_policies:
+            raise gl.vm.UserError("EXPECTED: observation policy does not exist")
+        prev = json.loads(self.observation_policies[policy_id])
+        if gl.message.sender_address.as_hex != prev["creator"]:
+            raise gl.vm.UserError("EXPECTED: only the policy creator can change its status")
+        status = "ACTIVE" if active else "INACTIVE"
+        self.observation_policy_status[policy_id] = status
+        return status
+
+    # ======================================================================
+    # FundingPolicy — reusable, versioned deterministic funding rules (ss.12)
+    # ======================================================================
+    @gl.public.write
+    def create_funding_policy(
+        self,
+        name: str,
+        latent_cap_bps: int,
+        watching_cap_bps: int,
+        emerging_cap_bps: int,
+        material_cap_bps: int,
+        systemic_cap_bps: int,
+        minimum_public_value_bps: int,
+        maximum_gaming_risk_bps: int,
+        minimum_attribution_confidence_bps: int,
+    ) -> str:
+        self._require_not_paused()
+        payload = self._validated_funding_payload(
+            name, latent_cap_bps, watching_cap_bps, emerging_cap_bps, material_cap_bps,
+            systemic_cap_bps, minimum_public_value_bps, maximum_gaming_risk_bps,
+            minimum_attribution_confidence_bps,
+        )
+        n = int(self.funding_policy_count) + 1
+        self.funding_policy_count = u256(n)
+        fid = str(n)
+        record = {
+            "funding_policy_id": fid,
+            "family_id": fid,
+            "version": 1,
+            "creator": gl.message.sender_address.as_hex,
+            "created_at": self._now(),
+        }
+        record.update(payload)
+        self.funding_policies[fid] = json.dumps(record)
+        self.funding_policy_status[fid] = "ACTIVE"
+        self.funding_policy_index[str(n - 1)] = fid
+        self.funding_policy_family_index[fid] = json.dumps([fid])
+        return fid
+
+    @gl.public.write
+    def version_funding_policy(
+        self,
+        funding_policy_id: str,
+        name: str,
+        latent_cap_bps: int,
+        watching_cap_bps: int,
+        emerging_cap_bps: int,
+        material_cap_bps: int,
+        systemic_cap_bps: int,
+        minimum_public_value_bps: int,
+        maximum_gaming_risk_bps: int,
+        minimum_attribution_confidence_bps: int,
+    ) -> str:
+        self._require_not_paused()
+        if not funding_policy_id or funding_policy_id not in self.funding_policies:
+            raise gl.vm.UserError("EXPECTED: funding policy does not exist")
+        prev = json.loads(self.funding_policies[funding_policy_id])
+        caller = gl.message.sender_address.as_hex
+        if caller != prev["creator"]:
+            raise gl.vm.UserError("EXPECTED: only the policy creator can version it")
+        family_id = prev["family_id"]
+        versions = json.loads(self.funding_policy_family_index[family_id])
+        if versions[-1] != funding_policy_id:
+            raise gl.vm.UserError("EXPECTED: can only version from the latest version of the family")
+        payload = self._validated_funding_payload(
+            name, latent_cap_bps, watching_cap_bps, emerging_cap_bps, material_cap_bps,
+            systemic_cap_bps, minimum_public_value_bps, maximum_gaming_risk_bps,
+            minimum_attribution_confidence_bps,
+        )
+        n = int(self.funding_policy_count) + 1
+        self.funding_policy_count = u256(n)
+        new_fid = str(n)
+        record = {
+            "funding_policy_id": new_fid,
+            "family_id": family_id,
+            "version": int(prev["version"]) + 1,
+            "creator": caller,
+            "created_at": self._now(),
+        }
+        record.update(payload)
+        self.funding_policies[new_fid] = json.dumps(record)
+        self.funding_policy_status[new_fid] = "ACTIVE"
+        self.funding_policy_status[funding_policy_id] = "INACTIVE"   # supersede previous
+        self.funding_policy_index[str(n - 1)] = new_fid
+        versions.append(new_fid)
+        self.funding_policy_family_index[family_id] = json.dumps(versions)
+        return new_fid
+
+    @gl.public.write
+    def set_funding_policy_status(self, funding_policy_id: str, active: bool) -> str:
+        self._require_not_paused()
+        if not funding_policy_id or funding_policy_id not in self.funding_policies:
+            raise gl.vm.UserError("EXPECTED: funding policy does not exist")
+        prev = json.loads(self.funding_policies[funding_policy_id])
+        if gl.message.sender_address.as_hex != prev["creator"]:
+            raise gl.vm.UserError("EXPECTED: only the policy creator can change its status")
+        status = "ACTIVE" if active else "INACTIVE"
+        self.funding_policy_status[funding_policy_id] = status
+        return status
+
+    # ======================================================================
+    # PublicGoodCandidate — registration + dormant-value lifecycle entry (ss.3)
+    # ======================================================================
+    @gl.public.write
+    def register_candidate(
+        self,
+        name: str,
+        description: str,
+        candidate_type: str,
+        primary_artifact_url: str,
+        origin_date: str,
+        public_access: bool,
+        observation_policy_id: str,
+        funding_policy_id: str,
+    ) -> str:
+        self._require_not_paused()
+        if not name or len(name) > MAX_NAME_LEN:
+            raise gl.vm.UserError(f"EXPECTED: name must be 1-{MAX_NAME_LEN} characters")
+        if not description or len(description) > MAX_DESCRIPTION_LEN:
+            raise gl.vm.UserError(f"EXPECTED: description must be 1-{MAX_DESCRIPTION_LEN} characters")
+        if candidate_type not in CANDIDATE_TYPES:
+            raise gl.vm.UserError(f"EXPECTED: invalid candidate_type '{candidate_type}'")
+        self._validate_http_url(primary_artifact_url, "primary_artifact_url")
+        if not origin_date or len(origin_date) > MAX_ORIGIN_DATE_LEN:
+            raise gl.vm.UserError(f"EXPECTED: origin_date must be 1-{MAX_ORIGIN_DATE_LEN} characters")
+        self._require_active_observation_policy(observation_policy_id)
+        self._require_active_funding_policy(funding_policy_id)
+
+        n = int(self.candidate_count) + 1
+        self.candidate_count = u256(n)
+        cid = str(n)
+        if cid in self.candidates:
+            # Unreachable with a monotonic counter; explicit no-silent-overwrite guard.
+            raise gl.vm.UserError("EXPECTED: candidate id collision")
+        candidate = {
+            "candidate_id": cid,
+            "submitter": gl.message.sender_address.as_hex,
+            "name": name,
+            "description": description,
+            "candidate_type": candidate_type,
+            "primary_artifact_url": primary_artifact_url,
+            "origin_date": origin_date,
+            "public_access": public_access,
+            "observation_policy_id": observation_policy_id,
+            "funding_policy_id": funding_policy_id,
+            "status": "DISCOVERED",
+            "created_at": self._now(),
+        }
+        self.candidates[cid] = json.dumps(candidate)
+        self.candidate_index[str(n - 1)] = cid
+        return cid
+
+    # ======================================================================
+    # Views
+    # ======================================================================
+    @gl.public.view
+    def get_candidate(self, candidate_id: str) -> str:
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        return self.candidates[candidate_id]
+
+    @gl.public.view
+    def list_candidates(self, offset: int, limit: int) -> str:
+        total = int(self.candidate_count)
+        o = max(0, offset)
+        l = max(0, min(limit, MAX_LIST_LIMIT))
+        items = []
+        for i in range(o, min(o + l, total)):
+            ordinal = str(i)
+            if ordinal in self.candidate_index:
+                cid = self.candidate_index[ordinal]
+                if cid in self.candidates:
+                    items.append(json.loads(self.candidates[cid]))
+        return json.dumps({"items": items, "total": total})
+
+    @gl.public.view
+    def get_observation_policy(self, policy_id: str) -> str:
+        if policy_id not in self.observation_policies:
+            raise gl.vm.UserError("EXPECTED: observation policy not found")
+        rec = json.loads(self.observation_policies[policy_id])
+        rec["status"] = self.observation_policy_status[policy_id]
+        return json.dumps(rec)
+
+    @gl.public.view
+    def list_observation_policies(self, offset: int, limit: int) -> str:
+        total = int(self.observation_policy_count)
+        o = max(0, offset)
+        l = max(0, min(limit, MAX_LIST_LIMIT))
+        items = []
+        for i in range(o, min(o + l, total)):
+            ordinal = str(i)
+            if ordinal in self.observation_policy_index:
+                pid = self.observation_policy_index[ordinal]
+                if pid in self.observation_policies:
+                    rec = json.loads(self.observation_policies[pid])
+                    rec["status"] = self.observation_policy_status[pid]
+                    items.append(rec)
+        return json.dumps({"items": items, "total": total})
+
+    @gl.public.view
+    def get_observation_policy_history(self, family_id: str) -> str:
+        if family_id not in self.observation_policy_family_index:
+            raise gl.vm.UserError("EXPECTED: observation policy family not found")
+        versions = json.loads(self.observation_policy_family_index[family_id])
+        out = []
+        for pid in versions:
+            rec = json.loads(self.observation_policies[pid])
+            out.append({
+                "policy_id": pid,
+                "version": rec["version"],
+                "status": self.observation_policy_status[pid],
+                "created_at": rec["created_at"],
+            })
+        return json.dumps({"family_id": family_id, "versions": out})
+
+    @gl.public.view
+    def get_funding_policy(self, funding_policy_id: str) -> str:
+        if funding_policy_id not in self.funding_policies:
+            raise gl.vm.UserError("EXPECTED: funding policy not found")
+        rec = json.loads(self.funding_policies[funding_policy_id])
+        rec["status"] = self.funding_policy_status[funding_policy_id]
+        return json.dumps(rec)
+
+    @gl.public.view
+    def list_funding_policies(self, offset: int, limit: int) -> str:
+        total = int(self.funding_policy_count)
+        o = max(0, offset)
+        l = max(0, min(limit, MAX_LIST_LIMIT))
+        items = []
+        for i in range(o, min(o + l, total)):
+            ordinal = str(i)
+            if ordinal in self.funding_policy_index:
+                fid = self.funding_policy_index[ordinal]
+                if fid in self.funding_policies:
+                    rec = json.loads(self.funding_policies[fid])
+                    rec["status"] = self.funding_policy_status[fid]
+                    items.append(rec)
+        return json.dumps({"items": items, "total": total})
+
+    @gl.public.view
+    def get_funding_policy_history(self, family_id: str) -> str:
+        if family_id not in self.funding_policy_family_index:
+            raise gl.vm.UserError("EXPECTED: funding policy family not found")
+        versions = json.loads(self.funding_policy_family_index[family_id])
+        out = []
+        for fid in versions:
+            rec = json.loads(self.funding_policies[fid])
+            out.append({
+                "funding_policy_id": fid,
+                "version": rec["version"],
+                "status": self.funding_policy_status[fid],
+                "created_at": rec["created_at"],
+            })
+        return json.dumps({"family_id": family_id, "versions": out})
 
     # -- introspection: health, versions, counters, and domain vocabulary --
     @gl.public.view
@@ -293,6 +820,7 @@ class Seedling(gl.Contract):
                 "latent_statuses": LATENT_STATUSES,
                 "checkpoint_statuses": CHECKPOINT_STATUSES,
                 "appeal_statuses": APPEAL_STATUSES,
+                "policy_statuses": POLICY_STATUSES,
             },
             "bounds": {
                 "bps_denominator": BPS_DENOMINATOR,
@@ -303,5 +831,11 @@ class Seedling(gl.Contract):
                 "max_checkpoints_per_candidate": MAX_CHECKPOINTS_PER_CANDIDATE,
                 "min_checkpoint_interval": MIN_CHECKPOINT_INTERVAL,
                 "max_checkpoint_interval": MAX_CHECKPOINT_INTERVAL,
+                "max_name_len": MAX_NAME_LEN,
+                "max_description_len": MAX_DESCRIPTION_LEN,
+                "max_url_len": MAX_URL_LEN,
+                "max_rule_len": MAX_RULE_LEN,
+                "max_independent_sources": MAX_INDEPENDENT_SOURCES,
+                "max_list_limit": MAX_LIST_LIMIT,
             },
         })
