@@ -8,12 +8,15 @@
 #   Stage 1 — storage scaffolding + protocol control.
 #   Stage 2 — candidate lifecycle registration + reusable, versioned
 #             ObservationPolicy and FundingPolicy primitives.
+#   Stage 3 — candidate evidence collection + latent-evidence freeze.
 #
-# Stage 2 deliberately does NOT implement: candidate evidence submission,
-# latent-evidence freezing, latent-value adjudication, contribution lineage,
-# checkpoints, public-value adjudication, funding calculation, or appeals.
-# Those belong to Stages 3-10. The file stays a valid, deployable gl.Contract
-# so the repository remains functional after every stage.
+# Stage 3 deliberately does NOT implement: latent-value adjudication (Stage 4),
+# contribution lineage, checkpoints, public-value adjudication, funding
+# calculation, appeals, or a frontend. In particular there is NO GenLayer
+# adjudication yet — Stage 3 only collects, validates, and permanently freezes
+# the latent evidence set so Stage 4 can evaluate a fixed input.
+# The file stays a valid, deployable gl.Contract so the repository remains
+# functional after every stage.
 
 from genlayer import *
 
@@ -173,6 +176,17 @@ APPEAL_STATUSES = ["OPEN", "EVALUATING", "RESOLVED"]
 # this operational flag (tracked in a dedicated status map) ever changes.
 POLICY_STATUSES = ["ACTIVE", "INACTIVE"]
 
+# Candidate evidence lifecycle (Stage 3). A submitted record is write-once; its
+# effective status is DERIVED from the owning candidate's latent-freeze flag, so
+# freezing never rewrites evidence rows (the strongest immutability guarantee).
+EVIDENCE_STATUSES = ["SUBMITTED", "FROZEN"]
+
+# Canonical empty/null checkpoint reference. Latent-stage evidence is not
+# attached to any impact checkpoint, so checkpoint_id is stored as this exact
+# sentinel rather than a fabricated id. Real checkpoint ids are 1-based decimal
+# strings, so "" can never collide with a genuine checkpoint id.
+NULL_CHECKPOINT_ID = ""
+
 # ---------------------------------------------------------------------------
 # Deterministic bounds — single source of truth for the scaffold, exposed via
 # get_protocol_info() and enforced by Stage 2 validation.
@@ -195,6 +209,10 @@ MAX_POLICY_NAME_LEN = 120
 MAX_RULE_LEN = 2000
 MAX_INDEPENDENT_SOURCES = 100
 MAX_LIST_LIMIT = 50                      # pagination page-size ceiling for views
+
+# Evidence field bounds (Stage 3)
+MAX_CONTENT_HASH_LEN = 128               # fits sha-256/512 hex and multibase CIDs
+MAX_SUMMARY_LEN = 1000
 
 
 class Seedling(gl.Contract):
@@ -248,6 +266,10 @@ class Seedling(gl.Contract):
     observation_policy_status: TreeMap[str, str]        # policy_id -> ACTIVE|INACTIVE
     funding_policy_status: TreeMap[str, str]            # funding_policy_id -> ACTIVE|INACTIVE
 
+    # -- Stage 3: latent-evidence duplicate guard + per-candidate freeze state --
+    evidence_dedup: TreeMap[str, str]           # "cid@len:nurl:hash" -> evidence_id
+    latent_freeze: TreeMap[str, str]            # candidate_id -> freeze snapshot JSON (presence => frozen)
+
     def __init__(self):
         self.config["owner"] = gl.message.sender_address.as_hex
         self.config["paused"] = "0"
@@ -294,6 +316,60 @@ class Seedling(gl.Contract):
         host = rest.split("/", 1)[0]
         if not host or "." not in host:
             raise gl.vm.UserError(f"EXPECTED: {field} must include a valid host")
+
+    def _normalize_source_host(self, url: str) -> str:
+        # Deterministic host normalization used for source-independence checks.
+        # Strips scheme, path, any user:pass@ userinfo, and the :port, then
+        # lowercases and drops a trailing FQDN dot. Because independence is
+        # measured on the normalized host (never the raw netloc), a different
+        # port or userinfo on the same host can NOT fake an independent source.
+        #
+        # LIMITATION (deliberate): this enforces only obvious host-level
+        # diversity. Distinct hosts or subdomains do NOT prove organizational
+        # independence — two hosts can share an owner, and one org can span many
+        # domains. Real independence is a Stage 4 GenLayer adjudication concern;
+        # deterministic contract logic must not claim to decide it.
+        rest = url.split("://", 1)[1]
+        netloc = rest.split("/", 1)[0]
+        if "@" in netloc:                       # drop user:pass@ userinfo
+            netloc = netloc.rsplit("@", 1)[1]
+        host = netloc.split(":", 1)[0]          # drop :port
+        host = host.lower()
+        while len(host) > 1 and host.endswith("."):
+            host = host[:-1]
+        return host
+
+    def _normalize_url_for_dedup(self, url: str) -> str:
+        # Conservative, deterministic URL canonicalization for duplicate
+        # detection: lowercase the scheme + authority, drop the #fragment, and
+        # trim a single trailing '/'. Path case and query string are preserved
+        # so genuinely distinct resources are never collapsed (no overreach).
+        u = url.split("#", 1)[0]
+        parts = u.split("://", 1)
+        scheme = parts[0].lower()
+        rest = parts[1]
+        slash = rest.find("/")
+        if slash == -1:
+            authority = rest
+            path = ""
+        else:
+            authority = rest[:slash]
+            path = rest[slash:]
+        if "@" in authority:
+            authority = authority.rsplit("@", 1)[1]
+        authority = authority.lower()
+        if len(path) > 1 and path.endswith("/"):
+            path = path[:-1]
+        return scheme + "://" + authority + path
+
+    def _evidence_view(self, evidence_id: str) -> dict:
+        # Load the write-once evidence row and merge the derived status.
+        # Effective status is FROZEN iff the owning candidate's latent set is
+        # frozen; the stored row itself is never mutated by a freeze.
+        rec = json.loads(self.evidence[evidence_id])
+        frozen = rec["candidate_id"] in self.latent_freeze
+        rec["status"] = "FROZEN" if frozen else "SUBMITTED"
+        return rec
 
     def _require_active_observation_policy(self, pid: str):
         if not pid or pid not in self.observation_policies:
@@ -683,6 +759,184 @@ class Seedling(gl.Contract):
         return cid
 
     # ======================================================================
+    # Candidate evidence — latent-stage collection + permanent freeze (ss.13)
+    #
+    # The deterministic evidence layer that Stage 4 GenLayer adjudication will
+    # later consume. It validates and stores real-world evidence, enforces
+    # host-level source diversity, and then permanently freezes the latent
+    # evidence set. It does NOT interpret evidence — evaluating latent value is
+    # Stage 4 (evaluate_latent_value), which is intentionally not implemented
+    # here. No evidence is ever deleted or mutated after submission.
+    # ======================================================================
+    @gl.public.write
+    def submit_candidate_evidence(
+        self,
+        candidate_id: str,
+        source_type: str,
+        source_url: str,
+        content_hash: str,
+        summary: str,
+        period_start: int,
+        period_end: int,
+    ) -> str:
+        self._require_not_paused()
+        # Rule 1: candidate must exist.
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        # Rule 3: no submission once the latent set is frozen. Checked before
+        # the status read so a frozen candidate always reports the freeze reason.
+        if candidate_id in self.latent_freeze:
+            raise gl.vm.UserError("EXPECTED: latent evidence is frozen; no more submissions")
+        candidate = json.loads(self.candidates[candidate_id])
+        # Rule 2: candidate must still accept latent-stage evidence. Only
+        # DISCOVERED does; a successful freeze moves it to LATENT.
+        if candidate["status"] != "DISCOVERED":
+            raise gl.vm.UserError("EXPECTED: candidate is not accepting latent-stage evidence")
+        # Rule 4: source_type from the approved evidence-category allowlist.
+        if source_type not in EVIDENCE_CATEGORIES:
+            raise gl.vm.UserError(f"EXPECTED: invalid source_type '{source_type}'")
+        # Rule 5: source_url must be a well-formed http(s) URL with a real host.
+        self._validate_http_url(source_url, "source_url")
+        # Rule 8: content_hash required, bounded, and whitespace-free.
+        if not content_hash or len(content_hash) > MAX_CONTENT_HASH_LEN:
+            raise gl.vm.UserError(f"EXPECTED: content_hash must be 1-{MAX_CONTENT_HASH_LEN} characters")
+        for ch in content_hash:
+            if ch.isspace():
+                raise gl.vm.UserError("EXPECTED: content_hash must not contain whitespace")
+        # Rule 9: summary required and bounded.
+        if not summary or len(summary) > MAX_SUMMARY_LEN:
+            raise gl.vm.UserError(f"EXPECTED: summary must be 1-{MAX_SUMMARY_LEN} characters")
+        # Rule 10: deterministic period validation (0 <= start <= end <= now).
+        now = self._now()
+        if period_start < 0 or period_end < 0:
+            raise gl.vm.UserError("EXPECTED: period_start and period_end must be non-negative")
+        if period_start > period_end:
+            raise gl.vm.UserError("EXPECTED: period_start must be <= period_end")
+        if period_end > now:
+            raise gl.vm.UserError("EXPECTED: period_end must not be in the future")
+        # Rule 13: strict maximum evidence count per candidate.
+        ids = (
+            json.loads(self.candidate_evidence_ids[candidate_id])
+            if candidate_id in self.candidate_evidence_ids
+            else []
+        )
+        if len(ids) >= MAX_EVIDENCE_PER_CANDIDATE:
+            raise gl.vm.UserError(
+                f"EXPECTED: candidate already has the maximum {MAX_EVIDENCE_PER_CANDIDATE} evidence records"
+            )
+        # Rules 6/7: normalize and store the source host (port/userinfo stripped)
+        # so ports cannot fake source independence.
+        source_host = self._normalize_source_host(source_url)
+        # Duplicate protection: reject an equivalent (normalized source URL +
+        # content_hash) tuple already recorded for this candidate. The key is a
+        # length-prefixed, injective encoding of (candidate_id, nurl, hash) so
+        # distinct tuples can never collide into a false duplicate — the only
+        # possible failure mode is over-rejection, never duplicate inflation.
+        nurl = self._normalize_url_for_dedup(source_url)
+        dedup_key = candidate_id + "@" + str(len(nurl)) + ":" + nurl + ":" + content_hash
+        if dedup_key in self.evidence_dedup:
+            raise gl.vm.UserError("EXPECTED: duplicate evidence (same normalized url + content_hash)")
+        # Rules 11/12: monotonic, collision-safe id; never a silent overwrite.
+        n = int(self.evidence_count) + 1
+        self.evidence_count = u256(n)
+        eid = str(n)
+        if eid in self.evidence:
+            raise gl.vm.UserError("EXPECTED: evidence id collision")
+        record = {
+            "evidence_id": eid,
+            "candidate_id": candidate_id,
+            "checkpoint_id": NULL_CHECKPOINT_ID,   # latent-stage: canonical null
+            "submitter": gl.message.sender_address.as_hex,
+            "source_type": source_type,
+            "source_url": source_url,
+            "source_host": source_host,
+            "content_hash": content_hash,
+            "summary": summary,
+            "period_start": period_start,
+            "period_end": period_end,
+            "status": "SUBMITTED",                 # derived at read; baked for a complete row
+            "submitted_at": now,
+        }
+        self.evidence[eid] = json.dumps(record)
+        ids.append(eid)
+        self.candidate_evidence_ids[candidate_id] = json.dumps(ids)
+        self.evidence_dedup[dedup_key] = eid
+        return eid
+
+    @gl.public.write
+    def freeze_latent_evidence(self, candidate_id: str) -> str:
+        self._require_not_paused()
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        # Reject a double freeze — the set is sealed exactly once.
+        if candidate_id in self.latent_freeze:
+            raise gl.vm.UserError("EXPECTED: latent evidence already frozen")
+        candidate = json.loads(self.candidates[candidate_id])
+        if candidate["status"] != "DISCOVERED":
+            raise gl.vm.UserError("EXPECTED: candidate is not in DISCOVERED state")
+        ids = (
+            json.loads(self.candidate_evidence_ids[candidate_id])
+            if candidate_id in self.candidate_evidence_ids
+            else []
+        )
+        total = len(ids)
+        if total < 1:
+            raise gl.vm.UserError("EXPECTED: cannot freeze with no evidence")
+        # Aggregate distinct categories and distinct normalized hosts.
+        categories = []
+        hosts = []
+        for eid in ids:
+            rec = json.loads(self.evidence[eid])
+            if rec["source_type"] not in categories:
+                categories.append(rec["source_type"])
+            if rec["source_host"] not in hosts:
+                hosts.append(rec["source_host"])
+        # Enforce the candidate's bound ObservationPolicy version. The exact
+        # version referenced at registration governs (its rules are immutable);
+        # we intentionally do NOT require it to still be ACTIVE, so a later
+        # deactivation cannot strand a candidate mid-collection. This is the
+        # policy gate — it cannot be bypassed.
+        pid = candidate["observation_policy_id"]
+        policy = json.loads(self.observation_policies[pid])
+        min_cat = policy["minimum_evidence_categories"]
+        min_src = policy["minimum_independent_sources"]
+        if len(categories) < min_cat:
+            raise gl.vm.UserError(
+                f"EXPECTED: need >= {min_cat} distinct evidence categories, have {len(categories)}"
+            )
+        # Distinct-host diversity ONLY. This is obvious host-level independence,
+        # not organizational independence (ambiguous independence is a Stage 4
+        # GenLayer concern — see _normalize_source_host).
+        if len(hosts) < min_src:
+            raise gl.vm.UserError(
+                f"EXPECTED: need >= {min_src} distinct source hosts, have {len(hosts)}"
+            )
+        now = self._now()
+        snapshot = {
+            "candidate_id": candidate_id,
+            "frozen": True,
+            "frozen_at": now,
+            "observation_policy_id": pid,
+            "evidence_count": total,
+            "evidence_ids": ids,
+            "distinct_category_count": len(categories),
+            "distinct_categories": categories,
+            "distinct_host_count": len(hosts),
+            "distinct_hosts": hosts,
+            "minimum_evidence_categories": min_cat,
+            "minimum_independent_sources": min_src,
+        }
+        # Presence of this key IS the freeze flag; the snapshot is written once
+        # and never mutated. Evidence rows are untouched (immutable), future
+        # submissions are blocked, and every record is preserved historically.
+        self.latent_freeze[candidate_id] = json.dumps(snapshot)
+        # Lifecycle transition: DISCOVERED -> LATENT, only on a successful freeze.
+        candidate["status"] = "LATENT"
+        candidate["latent_frozen_at"] = now
+        self.candidates[candidate_id] = json.dumps(candidate)
+        return "LATENT"
+
+    # ======================================================================
     # Views
     # ======================================================================
     @gl.public.view
@@ -704,6 +958,82 @@ class Seedling(gl.Contract):
                 if cid in self.candidates:
                     items.append(json.loads(self.candidates[cid]))
         return json.dumps({"items": items, "total": total})
+
+    @gl.public.view
+    def get_evidence(self, evidence_id: str) -> str:
+        if evidence_id not in self.evidence:
+            raise gl.vm.UserError("EXPECTED: evidence not found")
+        return json.dumps(self._evidence_view(evidence_id))
+
+    @gl.public.view
+    def list_candidate_evidence(self, candidate_id: str, offset: int, limit: int) -> str:
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        ids = (
+            json.loads(self.candidate_evidence_ids[candidate_id])
+            if candidate_id in self.candidate_evidence_ids
+            else []
+        )
+        total = len(ids)
+        o = max(0, offset)
+        l = max(0, min(limit, MAX_LIST_LIMIT))
+        items = []
+        for i in range(o, min(o + l, total)):
+            eid = ids[i]
+            if eid in self.evidence:
+                items.append(self._evidence_view(eid))
+        return json.dumps({
+            "items": items,
+            "total": total,
+            "frozen": candidate_id in self.latent_freeze,
+        })
+
+    @gl.public.view
+    def get_latent_evidence_set(self, candidate_id: str) -> str:
+        # Minimal, safe inspection of the latent evidence set. Before freeze it
+        # reports live progress toward the policy thresholds; after freeze it
+        # returns the immutable snapshot captured at freeze time.
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        candidate = json.loads(self.candidates[candidate_id])
+        if candidate_id in self.latent_freeze:
+            snap = json.loads(self.latent_freeze[candidate_id])
+            snap["candidate_status"] = candidate["status"]
+            snap["requirements_met"] = True
+            return json.dumps(snap)
+        ids = (
+            json.loads(self.candidate_evidence_ids[candidate_id])
+            if candidate_id in self.candidate_evidence_ids
+            else []
+        )
+        categories = []
+        hosts = []
+        for eid in ids:
+            rec = json.loads(self.evidence[eid])
+            if rec["source_type"] not in categories:
+                categories.append(rec["source_type"])
+            if rec["source_host"] not in hosts:
+                hosts.append(rec["source_host"])
+        pid = candidate["observation_policy_id"]
+        policy = json.loads(self.observation_policies[pid])
+        min_cat = policy["minimum_evidence_categories"]
+        min_src = policy["minimum_independent_sources"]
+        met = len(ids) >= 1 and len(categories) >= min_cat and len(hosts) >= min_src
+        return json.dumps({
+            "candidate_id": candidate_id,
+            "frozen": False,
+            "frozen_at": None,
+            "candidate_status": candidate["status"],
+            "observation_policy_id": pid,
+            "evidence_count": len(ids),
+            "distinct_category_count": len(categories),
+            "distinct_categories": categories,
+            "distinct_host_count": len(hosts),
+            "distinct_hosts": hosts,
+            "minimum_evidence_categories": min_cat,
+            "minimum_independent_sources": min_src,
+            "requirements_met": met,
+        })
 
     @gl.public.view
     def get_observation_policy(self, policy_id: str) -> str:
@@ -821,6 +1151,7 @@ class Seedling(gl.Contract):
                 "checkpoint_statuses": CHECKPOINT_STATUSES,
                 "appeal_statuses": APPEAL_STATUSES,
                 "policy_statuses": POLICY_STATUSES,
+                "evidence_statuses": EVIDENCE_STATUSES,
             },
             "bounds": {
                 "bps_denominator": BPS_DENOMINATOR,
@@ -837,5 +1168,10 @@ class Seedling(gl.Contract):
                 "max_rule_len": MAX_RULE_LEN,
                 "max_independent_sources": MAX_INDEPENDENT_SOURCES,
                 "max_list_limit": MAX_LIST_LIMIT,
+                "max_content_hash_len": MAX_CONTENT_HASH_LEN,
+                "max_summary_len": MAX_SUMMARY_LEN,
+            },
+            "conventions": {
+                "null_checkpoint_id": NULL_CHECKPOINT_ID,
             },
         })
