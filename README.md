@@ -21,7 +21,7 @@ GenLayer adjudicates the non-deterministic questions (latent significance, indep
 Confirmed against installed tooling (`gltest 0.29.2`, `genlayer-py 0.16.3`) and two deployed sibling contracts — not guessed.
 
 - Contract: `from genlayer import *`; `class X(gl.Contract)`; storage `u256` / `TreeMap[str, str]` / `Address`; `@gl.public.write[.payable]`, `@gl.public.view`; `gl.message.sender_address.as_hex`, `gl.message.value`; `gl.vm.UserError(...)`.
-- Adjudication: `gl.eq_principle.prompt_comparative(fn, criteria)` wrapping `gl.nondet.exec_prompt(...)` + `gl.get_webpage(url, mode="text")`.
+- Adjudication: `gl.eq_principle.prompt_comparative(fn, criteria)` wrapping `gl.nondet.exec_prompt(...)` + `gl.nondet.web.render(url, mode="text")`.
 - Header pragma: `# v0.2.16` + `# { "Depends": "py-genlayer:..." }`.
 
 ## Development
@@ -37,10 +37,10 @@ pytest tests/ -v
 
 ## Build roadmap (16 stages)
 
-1. **Repo inspection, API verification, storage scaffolding, test foundation** ✅ *current*
-2. Candidate lifecycle + ObservationPolicy + FundingPolicy
-3. Candidate evidence + latent-evidence freeze
-4. Latent-value adjudication
+1. **Repo inspection, API verification, storage scaffolding, test foundation** ✅
+2. Candidate lifecycle + ObservationPolicy + FundingPolicy ✅
+3. Candidate evidence + latent-evidence freeze ✅
+4. **Latent-value adjudication** ✅ *current*
 5. Contribution nodes + lineage edges
 6. Impact checkpoint lifecycle + checkpoint evidence
 7. Public-value adjudication + anti-gaming + substitute analysis
