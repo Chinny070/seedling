@@ -10,13 +10,17 @@
 #             ObservationPolicy and FundingPolicy primitives.
 #   Stage 3 — candidate evidence collection + latent-evidence freeze.
 #   Stage 4 — GenLayer latent-value adjudication over the frozen evidence set.
+#   Stage 5 — deterministic contribution-lineage graph: ContributionNode and
+#             LineageEdge CLAIMS (recorded, never adjudicated here).
 #
-# Stage 4 deliberately does NOT implement: contribution lineage, impact
-# checkpoints, public-value adjudication, funding calculation, appeals, or a
-# frontend. It answers only whether a candidate's ALREADY-FROZEN evidence shows
-# credible LATENT public-good significance (potential), never realized impact.
-# The file stays a valid, deployable gl.Contract so the repository remains
-# functional after every stage.
+# Stage 5 deliberately does NOT implement: impact checkpoints, public-value
+# adjudication, lineage adjudication, funding previews, appeals, or a frontend.
+# It records CLAIMED contribution history and CLAIMED lineage relationships as
+# append-only, immutable graph primitives; it never adjudicates attribution,
+# computes contributor shares, infers importance from role/relationship/order,
+# or changes a candidate's importance state. Real lineage adjudication and
+# contributor attribution are a later stage. The file stays a valid, deployable
+# gl.Contract so the repository remains functional after every stage.
 
 from genlayer import *
 
@@ -265,6 +269,59 @@ MAX_LATENT_PROMPT_CHARS = 60000
 MAX_LATENT_SUMMARY_LEN = MAX_SUMMARY_LEN
 
 
+# ---------------------------------------------------------------------------
+# Stage 5 — contribution-lineage graph (deterministic, CLAIMS only)
+#
+# ContributionNode and LineageEdge record CLAIMED contribution history and
+# CLAIMED lineage relationships. They are never adjudicated here: role,
+# relationship_type, claimed_strength_bps, and edge direction are DESCRIPTIVE
+# metadata, NOT proof of attribution, importance, or authorship. Real lineage
+# adjudication and contributor attribution are a later stage. Both record kinds
+# are append-only and immutable after creation — no mutation, no deletion, no
+# overwrite. (The relationship allowlist is LINEAGE_RELATIONSHIPS, above.)
+# ---------------------------------------------------------------------------
+
+# Reusable artifact-type allowlist — deliberately generic, never host- or
+# GitHub-specific, so any public-good artifact can be represented.
+CONTRIBUTION_ARTIFACT_TYPES = [
+    "SOURCE_CODE",
+    "DATASET",
+    "RESEARCH",
+    "DOCUMENTATION",
+    "SPECIFICATION",
+    "ARCHIVE",
+    "TOOLING",
+    "INFRASTRUCTURE",
+    "EDUCATIONAL_RESOURCE",
+    "OTHER",
+]
+
+# Descriptive contributor-role allowlist. Role is metadata ONLY — attribution is
+# never inferred from it (an ORIGINAL_AUTHOR is not automatically the primary
+# contributor; a MAINTAINER is not automatically secondary). Real attribution is
+# a later GenLayer adjudication stage.
+CONTRIBUTION_ROLES = [
+    "ORIGINAL_AUTHOR",
+    "FORK_MAINTAINER",
+    "MAJOR_REWRITER",
+    "EXTENSION_AUTHOR",
+    "MAINTAINER",
+    "DOCUMENTATION_AUTHOR",
+    "DATA_CURATOR",
+    "RESEARCHER",
+    "MIGRATION_AUTHOR",
+    "OTHER",
+]
+
+# A registered node/edge is only a CLAIM until a later adjudication stage; both
+# are created in the single CLAIMED state and never mutated thereafter.
+CONTRIBUTION_NODE_STATUSES = ["CLAIMED"]
+LINEAGE_EDGE_STATUSES = ["CLAIMED"]
+
+# artifact_hash reuses the evidence content-hash bound (sha-256/512 hex + CIDs).
+MAX_ARTIFACT_HASH_LEN = MAX_CONTENT_HASH_LEN
+
+
 class Seedling(gl.Contract):
     # -- protocol config: owner, paused, protocol_version, spec_version --
     config: TreeMap[str, str]
@@ -320,6 +377,10 @@ class Seedling(gl.Contract):
     evidence_dedup: TreeMap[str, str]           # "cid@len:nurl:hash" -> evidence_id
     latent_freeze: TreeMap[str, str]            # candidate_id -> freeze snapshot JSON (presence => frozen)
 
+    # -- Stage 5: contribution/lineage duplicate guards (append-only graph) --
+    contribution_artifact_dedup: TreeMap[str, str]  # "cid@len:nurl:hash" -> node_id
+    lineage_edge_dedup: TreeMap[str, str]           # "cid|from|to|rel" -> edge_id
+
     def __init__(self):
         self.config["owner"] = gl.message.sender_address.as_hex
         self.config["paused"] = "0"
@@ -366,6 +427,25 @@ class Seedling(gl.Contract):
         host = rest.split("/", 1)[0]
         if not host or "." not in host:
             raise gl.vm.UserError(f"EXPECTED: {field} must include a valid host")
+
+    def _canonical_address(self, value: str, field: str) -> str:
+        # Parse and canonicalize a contributor address through the GenLayer
+        # Address type: it accepts a 0x-hex / base64 / 20-byte form and rejects
+        # anything that is not exactly 20 bytes. We store the checksummed .as_hex
+        # form, so a contributor is canonical regardless of input casing and two
+        # spellings of the same address can never look distinct. The all-zero
+        # (null) address is rejected — a contribution must name a real
+        # contributor. This performs NO nondeterministic lookup; it only
+        # validates and normalizes the caller-supplied string.
+        if not isinstance(value, str) or not value:
+            raise gl.vm.UserError(f"EXPECTED: {field} is required")
+        try:
+            addr = Address(value)
+        except Exception:
+            raise gl.vm.UserError(f"EXPECTED: {field} must be a canonical address")
+        if addr.as_int == 0:
+            raise gl.vm.UserError(f"EXPECTED: {field} must not be the zero address")
+        return addr.as_hex
 
     def _normalize_source_host(self, url: str) -> str:
         # Deterministic host normalization used for source-independence checks.
@@ -1359,6 +1439,217 @@ class Seedling(gl.Contract):
         return json.dumps(record)
 
     # ======================================================================
+    # Stage 5 — contribution nodes + lineage edges (spec ss.16/17)
+    #
+    # The deterministic on-chain record of CLAIMED contribution history: who
+    # claims to have made each artifact, and how those artifacts claim to relate
+    # (forked-from, derived-from, rewrites, extends, incorporates, documents,
+    # maintains, migrates, replaces, inspires). This layer RECORDS claims; it
+    # NEVER adjudicates them. It deliberately does NOT:
+    #   * treat FORKED_FROM / high claimed_strength_bps / ORIGINAL_AUTHOR as proof
+    #   * compute contributor percentages or attribution shares
+    #   * infer that earlier == more important, or maintainer == primary author
+    #   * change a candidate's importance state (a WATCHING candidate stays
+    #     WATCHING; registering claims never promotes or demotes it)
+    # Real lineage adjudication + attribution is a later GenLayer stage. Nodes and
+    # edges are append-only and immutable: no mutation, no deletion, no overwrite,
+    # and the contract owner has NO special power to fabricate or edit history —
+    # registration is permissionless and the on-chain submitter is recorded.
+    #
+    # GRAPH SAFETY: self-loops (from == to) are rejected; an EXACT duplicate edge
+    # (same candidate, from, to, relationship_type) is rejected. Reciprocal claims
+    # (e.g. "A EXTENDS B" plus "B DOCUMENTS A", or even "A DERIVED_FROM B" plus
+    # "B DERIVED_FROM A") are ALLOWED as distinct directed claims: deciding which
+    # of two contradictory directional claims is true needs semantic causality,
+    # which is an adjudication concern, not a deterministic one. Detecting
+    # contradictory cycles belongs to the later lineage-adjudication stage.
+    # ======================================================================
+    @gl.public.write
+    def register_contribution_node(
+        self,
+        candidate_id: str,
+        contributor: str,
+        artifact_type: str,
+        artifact_url: str,
+        artifact_hash: str,
+        role: str,
+        summary: str,
+    ) -> str:
+        self._require_not_paused()
+        # Rule 1/2: candidate must exist; the node belongs to exactly this one.
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        # Rule 3: contributor required + canonical (stored as checksummed .as_hex).
+        # This is the CLAIMED contributor, distinct from the submitter (below).
+        contributor_hex = self._canonical_address(contributor, "contributor")
+        # Rule 4: artifact_type from the reusable, non-GitHub-specific allowlist.
+        if artifact_type not in CONTRIBUTION_ARTIFACT_TYPES:
+            raise gl.vm.UserError(f"EXPECTED: invalid artifact_type '{artifact_type}'")
+        # Rule 5: artifact_url must be a well-formed http(s) URL with a real host.
+        self._validate_http_url(artifact_url, "artifact_url")
+        # Rule 6: artifact_hash required, bounded, and whitespace-free.
+        if not artifact_hash or len(artifact_hash) > MAX_ARTIFACT_HASH_LEN:
+            raise gl.vm.UserError(f"EXPECTED: artifact_hash must be 1-{MAX_ARTIFACT_HASH_LEN} characters")
+        for ch in artifact_hash:
+            if ch.isspace():
+                raise gl.vm.UserError("EXPECTED: artifact_hash must not contain whitespace")
+        # Rule 7: role from the allowlist (descriptive only); summary required + bounded.
+        if role not in CONTRIBUTION_ROLES:
+            raise gl.vm.UserError(f"EXPECTED: invalid role '{role}'")
+        if not summary or len(summary) > MAX_SUMMARY_LEN:
+            raise gl.vm.UserError(f"EXPECTED: summary must be 1-{MAX_SUMMARY_LEN} characters")
+        # Bounded per-candidate node count.
+        ids = (
+            json.loads(self.candidate_node_ids[candidate_id])
+            if candidate_id in self.candidate_node_ids
+            else []
+        )
+        if len(ids) >= MAX_CONTRIBUTION_NODES:
+            raise gl.vm.UserError(
+                f"EXPECTED: candidate already has the maximum {MAX_CONTRIBUTION_NODES} contribution nodes"
+            )
+        # Rule 12: duplicate-artifact protection — reject an equivalent
+        # (normalized artifact_url + artifact_hash) already recorded for THIS
+        # candidate. Length-prefixed injective key: distinct tuples never collide,
+        # so the only possible failure is over-rejection, never false dedup.
+        nurl = self._normalize_url_for_dedup(artifact_url)
+        dedup_key = candidate_id + "@" + str(len(nurl)) + ":" + nurl + ":" + artifact_hash
+        if dedup_key in self.contribution_artifact_dedup:
+            raise gl.vm.UserError(
+                "EXPECTED: duplicate contribution artifact (same normalized url + artifact_hash)"
+            )
+        # Rules 8/9: monotonic, collision-safe id; never a silent overwrite.
+        n = int(self.contribution_node_count) + 1
+        self.contribution_node_count = u256(n)
+        nid = str(n)
+        if nid in self.contribution_nodes:
+            raise gl.vm.UserError("EXPECTED: contribution node id collision")
+        record = {
+            "node_id": nid,
+            "candidate_id": candidate_id,
+            "contributor": contributor_hex,
+            "artifact_type": artifact_type,
+            "artifact_url": artifact_url,
+            "artifact_hash": artifact_hash,
+            "created_at": self._now(),
+            "role": role,
+            "summary": summary,
+            "status": "CLAIMED",
+            # Smallest additive field beyond the canonical 10: the on-chain
+            # SUBMITTER of the claim, distinct from the CLAIMED contributor. It
+            # preserves provenance of who registered the claim without granting
+            # anyone authority over its truth (attribution is a later stage).
+            "submitter": gl.message.sender_address.as_hex,
+        }
+        # Rules 10/11: write once, append id to the per-candidate history. Records
+        # are never mutated or deleted afterward.
+        self.contribution_nodes[nid] = json.dumps(record)
+        ids.append(nid)
+        self.candidate_node_ids[candidate_id] = json.dumps(ids)
+        self.contribution_artifact_dedup[dedup_key] = nid
+        return nid
+
+    @gl.public.write
+    def register_lineage_edge(
+        self,
+        candidate_id: str,
+        from_node_id: str,
+        to_node_id: str,
+        relationship_type: str,
+        evidence_refs: list[str],
+        claimed_strength_bps: int,
+    ) -> str:
+        self._require_not_paused()
+        # Rule 1: candidate must exist.
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        # Rule 2: from_node must exist.
+        if from_node_id not in self.contribution_nodes:
+            raise gl.vm.UserError("EXPECTED: from_node_id not found")
+        # Rule 3: to_node must exist.
+        if to_node_id not in self.contribution_nodes:
+            raise gl.vm.UserError("EXPECTED: to_node_id not found")
+        from_node = json.loads(self.contribution_nodes[from_node_id])
+        to_node = json.loads(self.contribution_nodes[to_node_id])
+        # Rule 4: both endpoints must belong to the SAME candidate as the edge —
+        # cross-candidate lineage references are rejected.
+        if from_node["candidate_id"] != candidate_id or to_node["candidate_id"] != candidate_id:
+            raise gl.vm.UserError("EXPECTED: both nodes must belong to the edge's candidate")
+        # Rule 5: reject self-loops — a node cannot descend from itself.
+        if from_node_id == to_node_id:
+            raise gl.vm.UserError("EXPECTED: from_node_id and to_node_id must differ (no self-loop)")
+        # Rule 6: relationship_type from the allowlist.
+        if relationship_type not in LINEAGE_RELATIONSHIPS:
+            raise gl.vm.UserError(f"EXPECTED: invalid relationship_type '{relationship_type}'")
+        # Rule 7: claimed_strength_bps integer in [0,10000]. bool is a subclass of
+        # int in Python — reject it explicitly so true/false can't pass as a score.
+        if isinstance(claimed_strength_bps, bool) or not isinstance(claimed_strength_bps, int):
+            raise gl.vm.UserError("EXPECTED: claimed_strength_bps must be an integer")
+        if claimed_strength_bps < 0 or claimed_strength_bps > BPS_DENOMINATOR:
+            raise gl.vm.UserError(f"EXPECTED: claimed_strength_bps must be 0-{BPS_DENOMINATOR}")
+        # Rules 8/9: evidence_refs must reference EXISTING evidence of THIS
+        # candidate, with no duplicates. Empty is allowed (evidence is optional
+        # supporting material). Nothing is fetched — refs are on-chain ids only.
+        if not isinstance(evidence_refs, list):
+            raise gl.vm.UserError("EXPECTED: evidence_refs must be a list")
+        if len(evidence_refs) > MAX_EVIDENCE_PER_CANDIDATE:
+            raise gl.vm.UserError(f"EXPECTED: too many evidence_refs (max {MAX_EVIDENCE_PER_CANDIDATE})")
+        seen_refs = []
+        for ref in evidence_refs:
+            if not isinstance(ref, str) or ref not in self.evidence:
+                raise gl.vm.UserError(f"EXPECTED: evidence ref '{ref}' not found")
+            ev = json.loads(self.evidence[ref])
+            if ev["candidate_id"] != candidate_id:
+                raise gl.vm.UserError(f"EXPECTED: evidence ref '{ref}' belongs to a different candidate")
+            if ref in seen_refs:
+                raise gl.vm.UserError(f"EXPECTED: duplicate evidence ref '{ref}'")
+            seen_refs.append(ref)
+        # Bounded per-candidate edge count.
+        ids = (
+            json.loads(self.candidate_edge_ids[candidate_id])
+            if candidate_id in self.candidate_edge_ids
+            else []
+        )
+        if len(ids) >= MAX_LINEAGE_EDGES:
+            raise gl.vm.UserError(
+                f"EXPECTED: candidate already has the maximum {MAX_LINEAGE_EDGES} lineage edges"
+            )
+        # Rule 10 + graph safety: reject an EXACT duplicate edge (same candidate,
+        # from, to, relationship_type). Key is injective — candidate_id/from/to are
+        # validated decimal ids and relationship_type is an allowlisted [A-Z_]
+        # token, so none contain "|". Reciprocal (mirrored) edges are intentionally
+        # NOT rejected here; see the section header for the documented rationale.
+        dedup_key = candidate_id + "|" + from_node_id + "|" + to_node_id + "|" + relationship_type
+        if dedup_key in self.lineage_edge_dedup:
+            raise gl.vm.UserError("EXPECTED: duplicate lineage edge (same from, to, relationship)")
+        # Rules 11/12: monotonic, collision-safe id; never a silent overwrite.
+        n = int(self.lineage_edge_count) + 1
+        self.lineage_edge_count = u256(n)
+        eid = str(n)
+        if eid in self.lineage_edges:
+            raise gl.vm.UserError("EXPECTED: lineage edge id collision")
+        record = {
+            "edge_id": eid,
+            "candidate_id": candidate_id,
+            "from_node_id": from_node_id,
+            "to_node_id": to_node_id,
+            "relationship_type": relationship_type,
+            "evidence_refs": seen_refs,
+            "claimed_strength_bps": claimed_strength_bps,
+            "status": "CLAIMED",
+            "created_at": self._now(),
+            # Smallest additive field beyond the canonical 9 (see node above).
+            "submitter": gl.message.sender_address.as_hex,
+        }
+        # Rule 13: write once, append id to the per-candidate history; edges are
+        # never mutated or deleted afterward.
+        self.lineage_edges[eid] = json.dumps(record)
+        ids.append(eid)
+        self.candidate_edge_ids[candidate_id] = json.dumps(ids)
+        self.lineage_edge_dedup[dedup_key] = eid
+        return eid
+
+    # ======================================================================
     # Views
     # ======================================================================
     @gl.public.view
@@ -1487,6 +1778,60 @@ class Seedling(gl.Contract):
                 items.append(json.loads(self.latent_assessments[aid]))
         return json.dumps({"items": items, "total": total})
 
+    # -- Stage 5: contribution nodes + lineage edges (CLAIMS, read-only) --
+    @gl.public.view
+    def get_contribution_node(self, node_id: str) -> str:
+        if node_id not in self.contribution_nodes:
+            raise gl.vm.UserError("EXPECTED: contribution node not found")
+        return self.contribution_nodes[node_id]
+
+    @gl.public.view
+    def list_contribution_nodes(self, candidate_id: str, offset: int, limit: int) -> str:
+        # Append-only contribution history for a candidate, in creation order.
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        ids = (
+            json.loads(self.candidate_node_ids[candidate_id])
+            if candidate_id in self.candidate_node_ids
+            else []
+        )
+        total = len(ids)
+        o = max(0, offset)
+        l = max(0, min(limit, MAX_LIST_LIMIT))
+        items = []
+        for i in range(o, min(o + l, total)):
+            nid = ids[i]
+            if nid in self.contribution_nodes:
+                items.append(json.loads(self.contribution_nodes[nid]))
+        return json.dumps({"items": items, "total": total})
+
+    @gl.public.view
+    def get_lineage_edge(self, edge_id: str) -> str:
+        if edge_id not in self.lineage_edges:
+            raise gl.vm.UserError("EXPECTED: lineage edge not found")
+        return self.lineage_edges[edge_id]
+
+    @gl.public.view
+    def list_lineage_edges(self, candidate_id: str, offset: int, limit: int) -> str:
+        # Append-only lineage claims for a candidate, in creation order. Every
+        # edge is a CLAIM; ordering and direction here are NOT authoritative.
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        ids = (
+            json.loads(self.candidate_edge_ids[candidate_id])
+            if candidate_id in self.candidate_edge_ids
+            else []
+        )
+        total = len(ids)
+        o = max(0, offset)
+        l = max(0, min(limit, MAX_LIST_LIMIT))
+        items = []
+        for i in range(o, min(o + l, total)):
+            eid = ids[i]
+            if eid in self.lineage_edges:
+                items.append(json.loads(self.lineage_edges[eid]))
+        return json.dumps({"items": items, "total": total})
+
     @gl.public.view
     def get_observation_policy(self, policy_id: str) -> str:
         if policy_id not in self.observation_policies:
@@ -1607,6 +1952,10 @@ class Seedling(gl.Contract):
                 "appeal_statuses": APPEAL_STATUSES,
                 "policy_statuses": POLICY_STATUSES,
                 "evidence_statuses": EVIDENCE_STATUSES,
+                "contribution_artifact_types": CONTRIBUTION_ARTIFACT_TYPES,
+                "contribution_roles": CONTRIBUTION_ROLES,
+                "contribution_node_statuses": CONTRIBUTION_NODE_STATUSES,
+                "lineage_edge_statuses": LINEAGE_EDGE_STATUSES,
             },
             "bounds": {
                 "bps_denominator": BPS_DENOMINATOR,
@@ -1625,6 +1974,7 @@ class Seedling(gl.Contract):
                 "max_list_limit": MAX_LIST_LIMIT,
                 "max_content_hash_len": MAX_CONTENT_HASH_LEN,
                 "max_summary_len": MAX_SUMMARY_LEN,
+                "max_artifact_hash_len": MAX_ARTIFACT_HASH_LEN,
             },
             "conventions": {
                 "null_checkpoint_id": NULL_CHECKPOINT_ID,
