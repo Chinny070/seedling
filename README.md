@@ -42,8 +42,8 @@ pytest tests/ -v
 3. Candidate evidence + latent-evidence freeze ✅
 4. **Latent-value adjudication** ✅
 5. Contribution nodes + lineage edges ✅
-6. **Impact checkpoint lifecycle + checkpoint evidence** ✅ *current*
-7. Public-value adjudication + anti-gaming + substitute analysis
+6. **Impact checkpoint lifecycle + checkpoint evidence** ✅
+7. **Public-value adjudication + anti-gaming + substitute analysis** ✅ *current*
 8. Lineage adjudication + contributor attribution
 9. Deterministic progressive funding preview
 10. Appeals + checkpoint finalization
