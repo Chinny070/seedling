@@ -12,15 +12,14 @@
 #   Stage 4 — GenLayer latent-value adjudication over the frozen evidence set.
 #   Stage 5 — deterministic contribution-lineage graph: ContributionNode and
 #             LineageEdge CLAIMS (recorded, never adjudicated here).
+#   Stage 6 — impact checkpoint lifecycle + checkpoint-scoped evidence freeze.
 #
-# Stage 5 deliberately does NOT implement: impact checkpoints, public-value
-# adjudication, lineage adjudication, funding previews, appeals, or a frontend.
-# It records CLAIMED contribution history and CLAIMED lineage relationships as
-# append-only, immutable graph primitives; it never adjudicates attribution,
-# computes contributor shares, infers importance from role/relationship/order,
-# or changes a candidate's importance state. Real lineage adjudication and
-# contributor attribution are a later stage. The file stays a valid, deployable
-# gl.Contract so the repository remains functional after every stage.
+# Stage 6 deliberately does NOT implement public-value adjudication, lineage
+# adjudication, funding previews, appeals, or a frontend. It opens deterministic
+# longitudinal observation windows, collects checkpoint-scoped evidence, and
+# freezes an immutable package for Stage 7. Opening/freezing never changes a
+# candidate's importance state and performs no nondeterministic work. The file
+# stays a valid, deployable gl.Contract after every stage.
 
 from genlayer import *
 
@@ -321,6 +320,16 @@ LINEAGE_EDGE_STATUSES = ["CLAIMED"]
 # artifact_hash reuses the evidence content-hash bound (sha-256/512 hex + CIDs).
 MAX_ARTIFACT_HASH_LEN = MAX_CONTENT_HASH_LEN
 
+# Stage 6 checkpoint lifecycle. The scaffold already reserves richer future
+# states; this stage executes only OPEN -> EVIDENCE_FROZEN. Later stages own all
+# subsequent transitions and clear/roll the active-checkpoint index.
+CHECKPOINT_ALLOWED_CANDIDATE_STATUSES = [
+    "WATCHING",
+    "EMERGING",
+    "MATERIAL",
+    "SYSTEMIC",
+]
+
 
 class Seedling(gl.Contract):
     # -- protocol config: owner, paused, protocol_version, spec_version --
@@ -380,6 +389,11 @@ class Seedling(gl.Contract):
     # -- Stage 5: contribution/lineage duplicate guards (append-only graph) --
     contribution_artifact_dedup: TreeMap[str, str]  # "cid@len:nurl:hash" -> node_id
     lineage_edge_dedup: TreeMap[str, str]           # "cid|from|to|rel" -> edge_id
+
+    # -- Stage 6: active checkpoint + checkpoint evidence freeze/dedup --
+    candidate_active_checkpoint: TreeMap[str, str]  # candidate_id -> unresolved checkpoint_id
+    checkpoint_freeze: TreeMap[str, str]            # checkpoint_id -> immutable snapshot JSON
+    checkpoint_evidence_dedup: TreeMap[str, str]    # "checkpoint@len:nurl:hash" -> evidence_id
 
     def __init__(self):
         self.config["owner"] = gl.message.sender_address.as_hex
@@ -493,11 +507,15 @@ class Seedling(gl.Contract):
         return scheme + "://" + authority + path
 
     def _evidence_view(self, evidence_id: str) -> dict:
-        # Load the write-once evidence row and merge the derived status.
-        # Effective status is FROZEN iff the owning candidate's latent set is
-        # frozen; the stored row itself is never mutated by a freeze.
+        # Load the write-once evidence row and merge its scope-aware derived
+        # status. Latent records derive from latent_freeze; checkpoint records
+        # derive from checkpoint_freeze. No evidence row is mutated by a freeze.
         rec = json.loads(self.evidence[evidence_id])
-        frozen = rec["candidate_id"] in self.latent_freeze
+        checkpoint_id = rec["checkpoint_id"]
+        if checkpoint_id == NULL_CHECKPOINT_ID:
+            frozen = rec["candidate_id"] in self.latent_freeze
+        else:
+            frozen = checkpoint_id in self.checkpoint_freeze
         rec["status"] = "FROZEN" if frozen else "SUBMITTED"
         return rec
 
@@ -1065,6 +1083,262 @@ class Seedling(gl.Contract):
         candidate["latent_frozen_at"] = now
         self.candidates[candidate_id] = json.dumps(candidate)
         return "LATENT"
+
+    # ======================================================================
+    # Stage 6 — impact checkpoints + checkpoint-scoped evidence
+    #
+    # Checkpoint periods use the protocol's existing integer Unix-time
+    # convention. Stage 6 implements OPEN -> EVIDENCE_FROZEN only. A frozen
+    # checkpoint remains the candidate's active unresolved checkpoint until a
+    # later stage evaluates/finalizes it and deliberately clears that state.
+    # ======================================================================
+    @gl.public.write
+    def open_checkpoint(
+        self,
+        candidate_id: str,
+        period_start: int,
+        period_end: int,
+    ) -> str:
+        self._require_not_paused()
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        candidate = json.loads(self.candidates[candidate_id])
+        if gl.message.sender_address.as_hex != candidate["submitter"]:
+            raise gl.vm.UserError("EXPECTED: only the candidate submitter may open a checkpoint")
+        if candidate["status"] not in CHECKPOINT_ALLOWED_CANDIDATE_STATUSES:
+            raise gl.vm.UserError("EXPECTED: candidate is not eligible for impact checkpoints")
+        assessment_id = candidate.get("latent_assessment_id", "")
+        if not assessment_id or assessment_id not in self.latent_assessments:
+            raise gl.vm.UserError("EXPECTED: candidate has no finalized latent assessment")
+        assessment = json.loads(self.latent_assessments[assessment_id])
+        if assessment["candidate_id"] != candidate_id or assessment["status"] != "FINALIZED":
+            raise gl.vm.UserError("EXPECTED: candidate has no finalized latent assessment")
+        if (
+            isinstance(period_start, bool)
+            or not isinstance(period_start, int)
+            or isinstance(period_end, bool)
+            or not isinstance(period_end, int)
+        ):
+            raise gl.vm.UserError("EXPECTED: checkpoint periods must be integer timestamps")
+        now = self._now()
+        if period_start < 0 or period_end < 0:
+            raise gl.vm.UserError("EXPECTED: checkpoint periods must be non-negative")
+        if period_end <= period_start:
+            raise gl.vm.UserError("EXPECTED: checkpoint period_end must be after period_start")
+        if period_end > now:
+            raise gl.vm.UserError("EXPECTED: checkpoint period_end must not be in the future")
+        if candidate_id in self.candidate_active_checkpoint:
+            raise gl.vm.UserError("EXPECTED: candidate already has an active checkpoint")
+
+        ids = (
+            json.loads(self.candidate_checkpoint_ids[candidate_id])
+            if candidate_id in self.candidate_checkpoint_ids
+            else []
+        )
+        if len(ids) >= MAX_CHECKPOINTS_PER_CANDIDATE:
+            raise gl.vm.UserError("EXPECTED: candidate checkpoint limit reached")
+        # Integer timestamps permit a safe deterministic chronology rule:
+        # periods may be contiguous, but a new period cannot overlap or move
+        # behind any prior checkpoint period.
+        for prior_id in ids:
+            prior = json.loads(self.checkpoints[prior_id])
+            if period_start < prior["period_end"]:
+                raise gl.vm.UserError("EXPECTED: checkpoint period overlaps prior history")
+
+        n = int(self.checkpoint_count) + 1
+        checkpoint_id = str(n)
+        if checkpoint_id in self.checkpoints:
+            raise gl.vm.UserError("EXPECTED: checkpoint id collision")
+        self.checkpoint_count = u256(n)
+        checkpoint = {
+            "checkpoint_id": checkpoint_id,
+            "candidate_id": candidate_id,
+            "period_start": period_start,
+            "period_end": period_end,
+            "status": "OPEN",
+            "evidence_count": 0,
+            "impact_verdict_id": "",
+            "lineage_verdict_id": "",
+            "appeal_id": "",
+            "created_at": now,
+        }
+        self.checkpoints[checkpoint_id] = json.dumps(checkpoint)
+        ids.append(checkpoint_id)
+        self.candidate_checkpoint_ids[candidate_id] = json.dumps(ids)
+        self.candidate_active_checkpoint[candidate_id] = checkpoint_id
+        return checkpoint_id
+
+    @gl.public.write
+    def submit_checkpoint_evidence(
+        self,
+        checkpoint_id: str,
+        source_type: str,
+        source_url: str,
+        content_hash: str,
+        summary: str,
+        period_start: int,
+        period_end: int,
+    ) -> str:
+        self._require_not_paused()
+        if checkpoint_id not in self.checkpoints:
+            raise gl.vm.UserError("EXPECTED: checkpoint not found")
+        checkpoint = json.loads(self.checkpoints[checkpoint_id])
+        if checkpoint["status"] != "OPEN":
+            raise gl.vm.UserError("EXPECTED: checkpoint is not OPEN")
+        candidate_id = checkpoint["candidate_id"]
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: checkpoint candidate not found")
+        if source_type not in EVIDENCE_CATEGORIES:
+            raise gl.vm.UserError("EXPECTED: invalid evidence source_type")
+        self._validate_http_url(source_url, "source_url")
+        if not content_hash or len(content_hash) > MAX_CONTENT_HASH_LEN:
+            raise gl.vm.UserError(
+                f"EXPECTED: content_hash must be 1-{MAX_CONTENT_HASH_LEN} characters"
+            )
+        for ch in content_hash:
+            if ch.isspace():
+                raise gl.vm.UserError("EXPECTED: content_hash must not contain whitespace")
+        if not summary or len(summary) > MAX_SUMMARY_LEN:
+            raise gl.vm.UserError(
+                f"EXPECTED: summary must be 1-{MAX_SUMMARY_LEN} characters"
+            )
+        if (
+            isinstance(period_start, bool)
+            or not isinstance(period_start, int)
+            or isinstance(period_end, bool)
+            or not isinstance(period_end, int)
+        ):
+            raise gl.vm.UserError("EXPECTED: evidence periods must be integer timestamps")
+        now = self._now()
+        if period_start < 0 or period_end < 0 or period_start > period_end:
+            raise gl.vm.UserError("EXPECTED: invalid evidence period")
+        if period_end > now:
+            raise gl.vm.UserError("EXPECTED: evidence period_end must not be in the future")
+        if (
+            period_start < checkpoint["period_start"]
+            or period_end > checkpoint["period_end"]
+        ):
+            raise gl.vm.UserError("EXPECTED: evidence period must be within checkpoint period")
+
+        ids = (
+            json.loads(self.checkpoint_evidence_ids[checkpoint_id])
+            if checkpoint_id in self.checkpoint_evidence_ids
+            else []
+        )
+        if len(ids) >= MAX_EVIDENCE_PER_CHECKPOINT:
+            raise gl.vm.UserError("EXPECTED: checkpoint evidence limit reached")
+        source_host = self._normalize_source_host(source_url)
+        normalized_url = self._normalize_url_for_dedup(source_url)
+        dedup_key = (
+            checkpoint_id
+            + "@"
+            + str(len(normalized_url))
+            + ":"
+            + normalized_url
+            + ":"
+            + content_hash
+        )
+        if dedup_key in self.checkpoint_evidence_dedup:
+            raise gl.vm.UserError("EXPECTED: duplicate checkpoint evidence")
+
+        n = int(self.evidence_count) + 1
+        evidence_id = str(n)
+        if evidence_id in self.evidence:
+            raise gl.vm.UserError("EXPECTED: evidence id collision")
+        self.evidence_count = u256(n)
+        record = {
+            "evidence_id": evidence_id,
+            "candidate_id": candidate_id,
+            "checkpoint_id": checkpoint_id,
+            "submitter": gl.message.sender_address.as_hex,
+            "source_type": source_type,
+            "source_url": source_url,
+            "source_host": source_host,
+            "content_hash": content_hash,
+            "summary": summary,
+            "period_start": period_start,
+            "period_end": period_end,
+            "status": "SUBMITTED",
+            "submitted_at": now,
+        }
+        self.evidence[evidence_id] = json.dumps(record)
+        ids.append(evidence_id)
+        self.checkpoint_evidence_ids[checkpoint_id] = json.dumps(ids)
+        self.checkpoint_evidence_dedup[dedup_key] = evidence_id
+        checkpoint["evidence_count"] = len(ids)
+        self.checkpoints[checkpoint_id] = json.dumps(checkpoint)
+        return evidence_id
+
+    @gl.public.write
+    def freeze_checkpoint(self, checkpoint_id: str) -> str:
+        self._require_not_paused()
+        if checkpoint_id not in self.checkpoints:
+            raise gl.vm.UserError("EXPECTED: checkpoint not found")
+        checkpoint = json.loads(self.checkpoints[checkpoint_id])
+        if checkpoint["status"] != "OPEN":
+            raise gl.vm.UserError("EXPECTED: checkpoint is not OPEN")
+        if checkpoint_id in self.checkpoint_freeze:
+            raise gl.vm.UserError("EXPECTED: checkpoint evidence already frozen")
+        ids = (
+            json.loads(self.checkpoint_evidence_ids[checkpoint_id])
+            if checkpoint_id in self.checkpoint_evidence_ids
+            else []
+        )
+        if len(ids) < 1:
+            raise gl.vm.UserError("EXPECTED: cannot freeze checkpoint with no evidence")
+        categories = []
+        hosts = []
+        candidate_id = checkpoint["candidate_id"]
+        for evidence_id in ids:
+            rec = json.loads(self.evidence[evidence_id])
+            if rec["candidate_id"] != candidate_id or rec["checkpoint_id"] != checkpoint_id:
+                raise gl.vm.UserError("EXPECTED: checkpoint evidence scope mismatch")
+            if rec["source_type"] not in categories:
+                categories.append(rec["source_type"])
+            if rec["source_host"] not in hosts:
+                hosts.append(rec["source_host"])
+
+        candidate = json.loads(self.candidates[candidate_id])
+        policy_id = candidate["observation_policy_id"]
+        policy = json.loads(self.observation_policies[policy_id])
+        min_categories = policy["minimum_evidence_categories"]
+        min_sources = policy["minimum_independent_sources"]
+        if len(categories) < min_categories:
+            raise gl.vm.UserError("EXPECTED: insufficient checkpoint evidence categories")
+        if len(hosts) < min_sources:
+            raise gl.vm.UserError("EXPECTED: insufficient independent checkpoint hosts")
+
+        now = self._now()
+        snapshot = {
+            "checkpoint_id": checkpoint_id,
+            "candidate_id": candidate_id,
+            "frozen": True,
+            "frozen_at": now,
+            "period_start": checkpoint["period_start"],
+            "period_end": checkpoint["period_end"],
+            "observation_policy_id": policy_id,
+            "funding_policy_id": candidate["funding_policy_id"],
+            "latent_assessment_id": candidate["latent_assessment_id"],
+            "evidence_count": len(ids),
+            "evidence_ids": ids,
+            "distinct_category_count": len(categories),
+            "distinct_categories": categories,
+            "distinct_host_count": len(hosts),
+            "distinct_hosts": hosts,
+            "minimum_evidence_categories": min_categories,
+            "minimum_independent_sources": min_sources,
+        }
+        # The snapshot is append-only/fixed. Distinct hosts are only a minimum
+        # deterministic diversity gate; they do NOT prove organizational
+        # independence. Stage 7 must adjudicate ownership, maintainer overlap,
+        # bundling, project-family links, and duplicate downstream usage.
+        self.checkpoint_freeze[checkpoint_id] = json.dumps(snapshot)
+        checkpoint["status"] = "EVIDENCE_FROZEN"
+        checkpoint["evidence_count"] = len(ids)
+        self.checkpoints[checkpoint_id] = json.dumps(checkpoint)
+        # Intentionally retain candidate_active_checkpoint through freeze.
+        # A later evaluation/finalization stage owns clearing or rolling it.
+        return "EVIDENCE_FROZEN"
 
     # ======================================================================
     # Stage 4 — latent-value adjudication (GenLayer)
@@ -1778,6 +2052,115 @@ class Seedling(gl.Contract):
                 items.append(json.loads(self.latent_assessments[aid]))
         return json.dumps({"items": items, "total": total})
 
+    # -- Stage 6: impact checkpoints + checkpoint-scoped evidence --
+    @gl.public.view
+    def get_checkpoint(self, checkpoint_id: str) -> str:
+        if checkpoint_id not in self.checkpoints:
+            raise gl.vm.UserError("EXPECTED: checkpoint not found")
+        return self.checkpoints[checkpoint_id]
+
+    @gl.public.view
+    def list_checkpoints(self, candidate_id: str, offset: int, limit: int) -> str:
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        ids = (
+            json.loads(self.candidate_checkpoint_ids[candidate_id])
+            if candidate_id in self.candidate_checkpoint_ids
+            else []
+        )
+        total = len(ids)
+        o = max(0, offset)
+        l = max(0, min(limit, MAX_LIST_LIMIT))
+        items = []
+        for i in range(o, min(o + l, total)):
+            checkpoint_id = ids[i]
+            if checkpoint_id in self.checkpoints:
+                items.append(json.loads(self.checkpoints[checkpoint_id]))
+        return json.dumps({"items": items, "total": total})
+
+    @gl.public.view
+    def list_checkpoint_evidence(
+        self,
+        checkpoint_id: str,
+        offset: int,
+        limit: int,
+    ) -> str:
+        if checkpoint_id not in self.checkpoints:
+            raise gl.vm.UserError("EXPECTED: checkpoint not found")
+        ids = (
+            json.loads(self.checkpoint_evidence_ids[checkpoint_id])
+            if checkpoint_id in self.checkpoint_evidence_ids
+            else []
+        )
+        total = len(ids)
+        o = max(0, offset)
+        l = max(0, min(limit, MAX_LIST_LIMIT))
+        items = []
+        for i in range(o, min(o + l, total)):
+            evidence_id = ids[i]
+            if evidence_id in self.evidence:
+                items.append(self._evidence_view(evidence_id))
+        return json.dumps({
+            "items": items,
+            "total": total,
+            "frozen": checkpoint_id in self.checkpoint_freeze,
+        })
+
+    @gl.public.view
+    def get_checkpoint_evidence_set(self, checkpoint_id: str) -> str:
+        if checkpoint_id not in self.checkpoints:
+            raise gl.vm.UserError("EXPECTED: checkpoint not found")
+        checkpoint = json.loads(self.checkpoints[checkpoint_id])
+        if checkpoint_id in self.checkpoint_freeze:
+            snapshot = json.loads(self.checkpoint_freeze[checkpoint_id])
+            snapshot["checkpoint_status"] = checkpoint["status"]
+            snapshot["requirements_met"] = True
+            return json.dumps(snapshot)
+        ids = (
+            json.loads(self.checkpoint_evidence_ids[checkpoint_id])
+            if checkpoint_id in self.checkpoint_evidence_ids
+            else []
+        )
+        categories = []
+        hosts = []
+        for evidence_id in ids:
+            rec = json.loads(self.evidence[evidence_id])
+            if rec["source_type"] not in categories:
+                categories.append(rec["source_type"])
+            if rec["source_host"] not in hosts:
+                hosts.append(rec["source_host"])
+        candidate = json.loads(self.candidates[checkpoint["candidate_id"]])
+        policy_id = candidate["observation_policy_id"]
+        policy = json.loads(self.observation_policies[policy_id])
+        min_categories = policy["minimum_evidence_categories"]
+        min_sources = policy["minimum_independent_sources"]
+        requirements_met = (
+            len(ids) >= 1
+            and len(categories) >= min_categories
+            and len(hosts) >= min_sources
+        )
+        return json.dumps({
+            "checkpoint_id": checkpoint_id,
+            "candidate_id": checkpoint["candidate_id"],
+            "frozen": False,
+            "frozen_at": None,
+            "checkpoint_status": checkpoint["status"],
+            "period_start": checkpoint["period_start"],
+            "period_end": checkpoint["period_end"],
+            "observation_policy_id": policy_id,
+            "funding_policy_id": candidate["funding_policy_id"],
+            "latent_assessment_id": candidate["latent_assessment_id"],
+            "evidence_count": len(ids),
+            "evidence_ids": ids,
+            "distinct_category_count": len(categories),
+            "distinct_categories": categories,
+            "distinct_host_count": len(hosts),
+            "distinct_hosts": hosts,
+            "minimum_evidence_categories": min_categories,
+            "minimum_independent_sources": min_sources,
+            "requirements_met": requirements_met,
+        })
+
     # -- Stage 5: contribution nodes + lineage edges (CLAIMS, read-only) --
     @gl.public.view
     def get_contribution_node(self, node_id: str) -> str:
@@ -1949,6 +2332,7 @@ class Seedling(gl.Contract):
                 "latent_reason_codes": LATENT_REASON_CODES,
                 "latent_assessment_statuses": LATENT_ASSESSMENT_STATUSES,
                 "checkpoint_statuses": CHECKPOINT_STATUSES,
+                "checkpoint_allowed_candidate_statuses": CHECKPOINT_ALLOWED_CANDIDATE_STATUSES,
                 "appeal_statuses": APPEAL_STATUSES,
                 "policy_statuses": POLICY_STATUSES,
                 "evidence_statuses": EVIDENCE_STATUSES,
@@ -1978,5 +2362,7 @@ class Seedling(gl.Contract):
             },
             "conventions": {
                 "null_checkpoint_id": NULL_CHECKPOINT_ID,
+                "checkpoint_periods": "unix_timestamp_integers",
+                "one_active_checkpoint_per_candidate": True,
             },
         })

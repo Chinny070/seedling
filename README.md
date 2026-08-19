@@ -40,9 +40,9 @@ pytest tests/ -v
 1. **Repo inspection, API verification, storage scaffolding, test foundation** ✅
 2. Candidate lifecycle + ObservationPolicy + FundingPolicy ✅
 3. Candidate evidence + latent-evidence freeze ✅
-4. **Latent-value adjudication** ✅ *current*
-5. Contribution nodes + lineage edges
-6. Impact checkpoint lifecycle + checkpoint evidence
+4. **Latent-value adjudication** ✅
+5. Contribution nodes + lineage edges ✅
+6. **Impact checkpoint lifecycle + checkpoint evidence** ✅ *current*
 7. Public-value adjudication + anti-gaming + substitute analysis
 8. Lineage adjudication + contributor attribution
 9. Deterministic progressive funding preview
