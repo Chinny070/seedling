@@ -43,8 +43,8 @@ pytest tests/ -v
 4. **Latent-value adjudication** ✅
 5. Contribution nodes + lineage edges ✅
 6. **Impact checkpoint lifecycle + checkpoint evidence** ✅
-7. **Public-value adjudication + anti-gaming + substitute analysis** ✅ *current*
-8. Lineage adjudication + contributor attribution
+7. **Public-value adjudication + anti-gaming + substitute analysis** ✅
+8. **Lineage adjudication + contributor attribution** ✅ *current*
 9. Deterministic progressive funding preview
 10. Appeals + checkpoint finalization
 11. Contract audit + lint + tests + deployment prep
