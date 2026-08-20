@@ -11,8 +11,8 @@ SEEDLING discovers obscure public contributions early, tracks whether they becom
 Frontend + GenLayer Intelligent Contract only. **No backend, no private database, no hidden ranking service.** All canonical state lives on-chain.
 
 - **Contract** — Python `gl.Contract` (`contracts/seedling.py`)
-- **Frontend** — React + TypeScript + Vite + `genlayer-js` (added Stage 13–14)
-- **Network** — GenLayer StudioNet (chain id `61999`, RPC `https://studio.genlayer.com/api`; chain derived from `genlayer-js/chains` `studionet`)
+- **Frontend** — planned for Stage 13–14; it will call the contract directly.
+- **Deployment** — not performed. Stage 12 prepares and freezes the Studio deployment candidate only.
 
 GenLayer adjudicates the non-deterministic questions (latent significance, independent reuse, uniqueness, substitutes, realized public value, replacement difficulty, anti-gaming, lineage, contributor attribution, appeals). Deterministic contract logic owns all arithmetic — funding caps, cumulative release, contributor allocation, and policy gates. **No LLM arithmetic, no double release.**
 
@@ -33,7 +33,7 @@ pytest tests/ -v
 ```
 
 - `tests/direct/` — in-process GenVM execution, no node required (deterministic logic, status machines, funding math).
-- `tests/integration/` — runs against a GenLayer Studio/simulator endpoint (added Stage 11–12).
+- `tests/direct/test_stage12.py` — complete in-process lifecycle and deployment-readiness integration scenarios.
 
 ## Build roadmap (16 stages)
 
@@ -47,14 +47,34 @@ pytest tests/ -v
 8. **Lineage adjudication + contributor attribution** ✅
 9. **Deterministic progressive funding preview** ✅
 10. **Appeals + checkpoint finalization** ✅
-11. **Storage bounding, protocol hardening, and release-safety audit** ✅ *current*
-12. Manual Studio deployment + schema verification
+11. **Storage bounding, protocol hardening, and release-safety audit** ✅
+12. **Final contract integration audit + deployment readiness** ✅ *current*
 13. Frontend GenLayer integration foundation
 14. Full product frontend
 15. Integration Hub + guided demo + reusability audit + docs
 16. GitHub/Vercel release + Portal submission readiness
 
 The repository stays functional after every stage.
+
+## Protocol lifecycle
+
+Candidates enter as `DISCOVERED`, bind immutable policy-version IDs, collect and
+freeze compact latent evidence, and receive a comparative GenLayer latent assessment.
+A successful assessment moves the candidate to `WATCHING`. Repeated frozen impact
+checkpoints then adjudicate realized public value and evidence-based contributor
+lineage. Deterministic funding accounting unlocks only the incremental amount up to
+the bound policy tier cap. Appeals can uphold, modify, or void an effective result
+without rewriting the original verdict, and checkpoint finalization is irreversible.
+
+GenLayer remains essential where evidence requires substantive interpretation:
+independent reuse, uniqueness, substitutes, adoption quality, anti-gaming risk,
+realized importance, causal lineage, and appeals. Each flow uses a frozen on-chain
+package, bounded rendering of stored public URLs, explicit criteria, comparative
+validator reasoning, exact-schema validation, and storage only after success.
+
+The frozen constructor and all 56 public methods, parameter types, return types,
+frontend read routes, lifecycle values, and expected errors are documented in
+[`docs/CONTRACT_INTERFACE.md`](docs/CONTRACT_INTERFACE.md).
 
 ## Storage economics and historical integrity
 

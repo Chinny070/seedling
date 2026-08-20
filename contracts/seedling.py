@@ -453,6 +453,7 @@ class Seedling(gl.Contract):
     funding_policy_status: TreeMap[str, str]            # funding_policy_id -> ACTIVE|INACTIVE
 
     # -- Stage 3: latent-evidence duplicate guard + per-candidate freeze state --
+    candidate_artifact_dedup: TreeMap[str, str]  # length-prefixed normalized URL + name -> candidate_id
     evidence_dedup: TreeMap[str, str]           # "cid@len:nurl:hash" -> evidence_id
     latent_freeze: TreeMap[str, str]            # candidate_id -> freeze snapshot JSON (presence => frozen)
 
@@ -951,6 +952,13 @@ class Seedling(gl.Contract):
         if candidate_type not in CANDIDATE_TYPES:
             raise gl.vm.UserError(f"EXPECTED: invalid candidate_type '{candidate_type}'")
         self._validate_http_url(primary_artifact_url, "primary_artifact_url")
+        normalized_artifact_url = self._normalize_url_for_dedup(primary_artifact_url)
+        candidate_dedup_key = (
+            str(len(normalized_artifact_url)) + ":" + normalized_artifact_url
+            + ":" + name.lower()
+        )
+        if candidate_dedup_key in self.candidate_artifact_dedup:
+            raise gl.vm.UserError("EXPECTED: equivalent candidate already registered")
         if not origin_date or len(origin_date) > MAX_ORIGIN_DATE_LEN:
             raise gl.vm.UserError(f"EXPECTED: origin_date must be 1-{MAX_ORIGIN_DATE_LEN} characters")
         self._require_active_observation_policy(observation_policy_id)
@@ -978,6 +986,7 @@ class Seedling(gl.Contract):
         }
         self.candidates[cid] = json.dumps(candidate)
         self.candidate_index[str(n - 1)] = cid
+        self.candidate_artifact_dedup[candidate_dedup_key] = cid
         return cid
 
     # ======================================================================
