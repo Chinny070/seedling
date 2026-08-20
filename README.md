@@ -11,8 +11,8 @@ SEEDLING discovers obscure public contributions early, tracks whether they becom
 Frontend + GenLayer Intelligent Contract only. **No backend, no private database, no hidden ranking service.** All canonical state lives on-chain.
 
 - **Contract** — Python `gl.Contract` (`contracts/seedling.py`)
-- **Frontend** — planned for Stage 13–14; it will call the contract directly.
-- **Deployment** — not performed. Stage 12 prepares and freezes the Studio deployment candidate only.
+- **Frontend** — React/Vite client calling the contract directly through `genlayer-js`.
+- **Deployment** — StudioNet chain 61999 at `0xcb2FfAC9E22dfE582Ab3A9F45CcA1FAB0cEC1D25`.
 
 GenLayer adjudicates the non-deterministic questions (latent significance, independent reuse, uniqueness, substitutes, realized public value, replacement difficulty, anti-gaming, lineage, contributor attribution, appeals). Deterministic contract logic owns all arithmetic — funding caps, cumulative release, contributor allocation, and policy gates. **No LLM arithmetic, no double release.**
 
@@ -48,9 +48,9 @@ pytest tests/ -v
 9. **Deterministic progressive funding preview** ✅
 10. **Appeals + checkpoint finalization** ✅
 11. **Storage bounding, protocol hardening, and release-safety audit** ✅
-12. **Final contract integration audit + deployment readiness** ✅ *current*
-13. Frontend GenLayer integration foundation
-14. Full product frontend
+12. **Final contract integration audit + deployment readiness** ✅
+13. Frontend GenLayer integration foundation ✅
+14. **Canonical StudioNet deployment + live frontend binding** ✅ *current*
 15. Integration Hub + guided demo + reusability audit + docs
 16. GitHub/Vercel release + Portal submission readiness
 
@@ -82,6 +82,10 @@ commands, production build, and security boundaries are documented in
 [`frontend/README.md`](frontend/README.md). A real
 `VITE_SEEDLING_CONTRACT_ADDRESS` is required; no placeholder is treated as a live
 deployment and no demo data is mixed with contract reads.
+
+Canonical deployment provenance, verified live reads, and the remaining manual
+injected-wallet checks are documented in
+[`docs/STUDIONET_DEPLOYMENT.md`](docs/STUDIONET_DEPLOYMENT.md).
 
 ## Storage economics and historical integrity
 
