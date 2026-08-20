@@ -76,6 +76,13 @@ The frozen constructor and all 56 public methods, parameter types, return types,
 frontend read routes, lifecycle values, and expected errors are documented in
 [`docs/CONTRACT_INTERFACE.md`](docs/CONTRACT_INTERFACE.md).
 
+The Stage 13 direct-contract frontend lives in [`frontend/`](frontend/). Its
+configuration, StudioNet wallet flow, transaction-finality model, routes, local
+commands, production build, and security boundaries are documented in
+[`frontend/README.md`](frontend/README.md). A real
+`VITE_SEEDLING_CONTRACT_ADDRESS` is required; no placeholder is treated as a live
+deployment and no demo data is mixed with contract reads.
+
 ## Storage economics and historical integrity
 
 SEEDLING stores compact canonical protocol records on-chain: candidates, immutable

@@ -1,0 +1,11 @@
+export interface Candidate { candidate_id:string; name:string; description:string; candidate_type:string; primary_artifact_url:string; origin_date:string; public_access:boolean; observation_policy_id:string; funding_policy_id:string; status:string; latent_assessment_id?:string }
+export interface Page<T> { items:T[]; total:number }
+export interface LatentAssessment { latent_value_bps:number; independent_reuse_bps:number; uniqueness_bps:number; substitution_risk_bps:number; maintainer_health_bps:number; ecosystem_positioning_bps:number; gaming_risk_bps:number; reason_codes:string[]; summary:string }
+export interface Checkpoint { checkpoint_id:string; candidate_id:string; period_start:number; period_end:number; status:string; evidence_count:number; impact_verdict_id:string; lineage_verdict_id:string; appeal_id:string }
+export interface Evidence { evidence_id:string; source_type:string; source_url:string; source_host:string; summary:string; status:string; checkpoint_id:string }
+export interface Node { node_id:string; contributor:string; artifact_type:string; artifact_url:string; role:string; summary:string }
+export interface Edge { edge_id:string; from_node_id:string; to_node_id:string; relationship_type:string; claimed_strength_bps:number }
+export interface Funding { funding_calculation_id:string; checkpoint_id:string; impact_tier:string; target_cumulative_funding:number; previously_recognized_funding:number; newly_unlocked_funding:number; status:string }
+export interface Appeal { appeal_id:string; checkpoint_id:string; ground:string; status:string; decision:string; statement:string }
+export const bps = (value?:number) => Math.max(0, Math.min(100, (value ?? 0) / 100));
+export const shortAddress = (value:string) => value.length > 12 ? `${value.slice(0,6)}…${value.slice(-4)}` : value;
