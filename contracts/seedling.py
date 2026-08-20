@@ -15,9 +15,10 @@
 #   Stage 6 — impact checkpoint lifecycle + checkpoint-scoped evidence freeze.
 #   Stage 7 — realized public-value adjudication + anti-gaming/substitute analysis.
 #   Stage 8 — contribution-lineage adjudication + contributor attribution.
+#   Stage 9 — deterministic progressive dormant-funding accounting.
 #
-# Stage 8 adjudicates contributor attribution for an evaluated checkpoint. It
-# deliberately does NOT calculate funding, handle appeals, finalize checkpoints,
+# Stage 9 deterministically calculates cumulative and newly unlocked funding. It
+# deliberately does NOT transfer assets, handle appeals, finalize checkpoints,
 # or provide a frontend. The file stays deployable after every stage.
 
 from genlayer import *
@@ -383,6 +384,11 @@ LINEAGE_VERDICT_STATUSES = ["FINALIZED"]
 MAX_LINEAGE_PROMPT_CHARS = 60000
 MAX_LINEAGE_SUMMARY_LEN = MAX_SUMMARY_LEN
 
+# Stage 9 calculations are immutable accounting records. Funding units are the
+# generic policy cap units (0..10000); no token, currency, treasury, or transfer
+# mechanism is implied.
+FUNDING_CALCULATION_STATUSES = ["CALCULATED"]
+
 
 class Seedling(gl.Contract):
     # -- protocol config: owner, paused, protocol_version, spec_version --
@@ -412,7 +418,7 @@ class Seedling(gl.Contract):
     contribution_nodes: TreeMap[str, str]
     lineage_edges: TreeMap[str, str]
     lineage_verdicts: TreeMap[str, str]
-    funding_previews: TreeMap[str, str]     # keyed by checkpoint id
+    funding_previews: TreeMap[str, str]     # checkpoint_id -> Stage 9 FundingCalculation JSON
     appeals: TreeMap[str, str]
 
     # -- enumeration + parent->children index maps (key -> JSON list) --
@@ -2378,6 +2384,158 @@ class Seedling(gl.Contract):
         return json.dumps(record)
 
     # ======================================================================
+    # Stage 9 — progressive dormant-funding accounting (fully deterministic)
+    # ======================================================================
+    @gl.public.write
+    def calculate_funding(self, checkpoint_id: str) -> str:
+        self._require_not_paused()
+        if checkpoint_id not in self.checkpoints:
+            raise gl.vm.UserError("EXPECTED: checkpoint not found")
+        if checkpoint_id in self.funding_previews:
+            raise gl.vm.UserError("EXPECTED: checkpoint funding already calculated")
+        checkpoint = json.loads(self.checkpoints[checkpoint_id])
+        if checkpoint["status"] != "EVALUATED":
+            raise gl.vm.UserError("EXPECTED: checkpoint is not EVALUATED")
+        candidate_id = checkpoint["candidate_id"]
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: checkpoint candidate not found")
+        candidate = json.loads(self.candidates[candidate_id])
+
+        impact_id = checkpoint.get("impact_verdict_id", "")
+        lineage_id = checkpoint.get("lineage_verdict_id", "")
+        if not impact_id or impact_id not in self.impact_verdicts:
+            raise gl.vm.UserError("EXPECTED: valid impact verdict not found")
+        if not lineage_id or lineage_id not in self.lineage_verdicts:
+            raise gl.vm.UserError("EXPECTED: valid lineage verdict not found")
+        impact = json.loads(self.impact_verdicts[impact_id])
+        lineage = json.loads(self.lineage_verdicts[lineage_id])
+        if impact["checkpoint_id"] != checkpoint_id or impact["candidate_id"] != candidate_id:
+            raise gl.vm.UserError("EXPECTED: impact verdict scope mismatch")
+        if lineage["checkpoint_id"] != checkpoint_id or lineage["candidate_id"] != candidate_id:
+            raise gl.vm.UserError("EXPECTED: lineage verdict scope mismatch")
+        if impact["status"] != "FINALIZED" or lineage["status"] != "FINALIZED":
+            raise gl.vm.UserError("EXPECTED: verdicts must be finalized")
+
+        funding_policy_id = candidate["funding_policy_id"]
+        if funding_policy_id not in self.funding_policies:
+            raise gl.vm.UserError("EXPECTED: historically bound funding policy not found")
+        policy = json.loads(self.funding_policies[funding_policy_id])
+        tier = impact["importance_tier"]
+        if tier not in IMPACT_IMPORTANCE_TIERS:
+            raise gl.vm.UserError("EXPECTED: impact verdict has invalid importance tier")
+
+        # Historical accounting is derived only from immutable prior checkpoint
+        # calculations. This avoids a mutable balance that could diverge from its
+        # append-only audit trail.
+        checkpoint_ids = (
+            json.loads(self.candidate_checkpoint_ids[candidate_id])
+            if candidate_id in self.candidate_checkpoint_ids
+            else []
+        )
+        previously_recognized = 0
+        for prior_checkpoint_id in checkpoint_ids:
+            if prior_checkpoint_id == checkpoint_id:
+                continue
+            if prior_checkpoint_id in self.funding_previews:
+                prior = json.loads(self.funding_previews[prior_checkpoint_id])
+                if prior["candidate_id"] != candidate_id:
+                    raise gl.vm.UserError("EXPECTED: prior funding history scope mismatch")
+                recognized = (
+                    prior["previously_recognized_funding"]
+                    + prior["newly_unlocked_funding"]
+                )
+                if recognized > previously_recognized:
+                    previously_recognized = recognized
+
+        cap_field = {
+            "WATCHING": "watching_cap_bps",
+            "EMERGING": "emerging_cap_bps",
+            "MATERIAL": "material_cap_bps",
+            "SYSTEMIC": "systemic_cap_bps",
+        }
+        # STALLED/DECLINED and failed deterministic policy gates preserve the
+        # historical recognized amount: no increase and no invented clawback.
+        target = previously_recognized
+        gates_pass = (
+            impact["public_value_bps"] >= policy["minimum_public_value_bps"]
+            and impact["gaming_risk_bps"] <= policy["maximum_gaming_risk_bps"]
+            and lineage["attribution_confidence_bps"]
+                >= policy["minimum_attribution_confidence_bps"]
+        )
+        if tier in cap_field and gates_pass:
+            policy_target = policy[cap_field[tier]]
+            # A lower later tier/cap cannot reduce historical entitlement.
+            target = max(previously_recognized, policy_target)
+        newly_unlocked = max(0, target - previously_recognized)
+
+        allocations = lineage["contributor_allocations"]
+        if not isinstance(allocations, list) or len(allocations) < 1:
+            raise gl.vm.UserError("EXPECTED: lineage contributor allocations missing")
+        checked = []
+        total_bps = 0
+        seen_nodes = []
+        for allocation in allocations:
+            node_id = allocation["node_id"]
+            bps = allocation["attribution_bps"]
+            if node_id in seen_nodes or node_id not in self.contribution_nodes:
+                raise gl.vm.UserError("EXPECTED: invalid lineage contributor allocation")
+            node = json.loads(self.contribution_nodes[node_id])
+            if node["candidate_id"] != candidate_id:
+                raise gl.vm.UserError("EXPECTED: lineage contributor belongs to another candidate")
+            if isinstance(bps, bool) or not isinstance(bps, int) or bps < 0 or bps > 10000:
+                raise gl.vm.UserError("EXPECTED: invalid contributor attribution BPS")
+            seen_nodes.append(node_id)
+            total_bps += bps
+            checked.append({
+                "node_id": node_id,
+                "contributor": node["contributor"],
+                "attribution_bps": bps,
+                "amount": (newly_unlocked * bps) // BPS_DENOMINATOR,
+            })
+        if total_bps != BPS_DENOMINATOR:
+            raise gl.vm.UserError("EXPECTED: lineage attribution must total exactly 10000 BPS")
+
+        # Canonical rounding: floor every proportional share, then assign each
+        # remaining unit to ascending numeric node_id order. Dust cannot vanish
+        # or create value, and allocation amounts always sum exactly to unlocked.
+        checked.sort(key=lambda item: int(item["node_id"]))
+        allocated = 0
+        for item in checked:
+            allocated += item["amount"]
+        remainder = newly_unlocked - allocated
+        for i in range(remainder):
+            checked[i]["amount"] += 1
+        allocation_total = 0
+        for item in checked:
+            allocation_total += item["amount"]
+        if allocation_total != newly_unlocked:
+            raise gl.vm.UserError("EXPECTED: contributor allocation amount mismatch")
+
+        # Existing scaffold keys funding_previews by checkpoint. Checkpoint ids
+        # are globally monotonic/collision-safe, so they are also canonical
+        # funding_calculation_ids without introducing a conflicting counter.
+        calculation_id = checkpoint_id
+        record = {
+            "funding_calculation_id": calculation_id,
+            "checkpoint_id": checkpoint_id,
+            "candidate_id": candidate_id,
+            "funding_policy_id": funding_policy_id,
+            "impact_verdict_id": impact_id,
+            "lineage_verdict_id": lineage_id,
+            "impact_tier": tier,
+            "target_cumulative_funding": target,
+            "previously_recognized_funding": previously_recognized,
+            "newly_unlocked_funding": newly_unlocked,
+            "attribution_confidence_bps": lineage["attribution_confidence_bps"],
+            "contributor_allocations": checked,
+            "status": "CALCULATED",
+            "created_at": self._now(),
+        }
+        self.funding_previews[checkpoint_id] = json.dumps(record)
+        # No candidate/checkpoint lifecycle mutation and no transfer occur here.
+        return json.dumps(record)
+
+    # ======================================================================
     # Stage 5 — contribution nodes + lineage edges (spec ss.16/17)
     #
     # The deterministic on-chain record of CLAIMED contribution history: who
@@ -2888,6 +3046,69 @@ class Seedling(gl.Contract):
                 items.append(json.loads(self.lineage_verdicts[verdict_id]))
         return json.dumps({"items": items, "total": total})
 
+    # -- Stage 9: deterministic append-only funding calculations --
+    @gl.public.view
+    def get_funding_calculation(self, funding_calculation_id: str) -> str:
+        if funding_calculation_id not in self.funding_previews:
+            raise gl.vm.UserError("EXPECTED: funding calculation not found")
+        return self.funding_previews[funding_calculation_id]
+
+    @gl.public.view
+    def list_candidate_funding_calculations(
+        self,
+        candidate_id: str,
+        offset: int,
+        limit: int,
+    ) -> str:
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        checkpoint_ids = (
+            json.loads(self.candidate_checkpoint_ids[candidate_id])
+            if candidate_id in self.candidate_checkpoint_ids
+            else []
+        )
+        calculation_ids = []
+        for checkpoint_id in checkpoint_ids:
+            if checkpoint_id in self.funding_previews:
+                calculation_ids.append(checkpoint_id)
+        total = len(calculation_ids)
+        o = max(0, offset)
+        l = max(0, min(limit, MAX_LIST_LIMIT))
+        items = []
+        for i in range(o, min(o + l, total)):
+            items.append(json.loads(self.funding_previews[calculation_ids[i]]))
+        return json.dumps({"items": items, "total": total})
+
+    @gl.public.view
+    def get_candidate_funding_summary(self, candidate_id: str) -> str:
+        if candidate_id not in self.candidates:
+            raise gl.vm.UserError("EXPECTED: candidate not found")
+        checkpoint_ids = (
+            json.loads(self.candidate_checkpoint_ids[candidate_id])
+            if candidate_id in self.candidate_checkpoint_ids
+            else []
+        )
+        total_recognized = 0
+        count = 0
+        latest_id = ""
+        for checkpoint_id in checkpoint_ids:
+            if checkpoint_id in self.funding_previews:
+                rec = json.loads(self.funding_previews[checkpoint_id])
+                recognized = (
+                    rec["previously_recognized_funding"]
+                    + rec["newly_unlocked_funding"]
+                )
+                if recognized > total_recognized:
+                    total_recognized = recognized
+                count += 1
+                latest_id = rec["funding_calculation_id"]
+        return json.dumps({
+            "candidate_id": candidate_id,
+            "cumulative_recognized_funding": total_recognized,
+            "calculation_count": count,
+            "latest_funding_calculation_id": latest_id,
+        })
+
     # -- Stage 5: contribution nodes + lineage edges (CLAIMS, read-only) --
     @gl.public.view
     def get_contribution_node(self, node_id: str) -> str:
@@ -3066,6 +3287,7 @@ class Seedling(gl.Contract):
                 "impact_verdict_statuses": IMPACT_VERDICT_STATUSES,
                 "lineage_reason_codes": LINEAGE_REASON_CODES,
                 "lineage_verdict_statuses": LINEAGE_VERDICT_STATUSES,
+                "funding_calculation_statuses": FUNDING_CALCULATION_STATUSES,
                 "appeal_statuses": APPEAL_STATUSES,
                 "policy_statuses": POLICY_STATUSES,
                 "evidence_statuses": EVIDENCE_STATUSES,
@@ -3097,5 +3319,7 @@ class Seedling(gl.Contract):
                 "null_checkpoint_id": NULL_CHECKPOINT_ID,
                 "checkpoint_periods": "unix_timestamp_integers",
                 "one_active_checkpoint_per_candidate": True,
+                "funding_calculation_id": "checkpoint_id",
+                "funding_rounding": "floor_then_remainder_to_ascending_node_id",
             },
         })
