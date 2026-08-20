@@ -395,6 +395,11 @@ MAX_APPEALS_PER_CANDIDATE = 32
 MAX_APPEAL_STATEMENT_LEN = 1000
 MAX_APPEAL_PROMPT_CHARS = 60000
 
+# Stage 11 release-safety bounds. Global append-only registries remain paged;
+# per-family histories are capped so their legacy whole-history views can never
+# construct an unbounded response.
+MAX_POLICY_VERSIONS_PER_FAMILY = 32
+
 
 class Seedling(gl.Contract):
     # -- protocol config: owner, paused, protocol_version, spec_version --
@@ -781,6 +786,8 @@ class Seedling(gl.Contract):
         versions = json.loads(self.observation_policy_family_index[family_id])
         if versions[-1] != policy_id:
             raise gl.vm.UserError("EXPECTED: can only version from the latest version of the family")
+        if len(versions) >= MAX_POLICY_VERSIONS_PER_FAMILY:
+            raise gl.vm.UserError("EXPECTED: observation policy version limit reached")
         payload = self._validated_observation_payload(
             name, candidate_types, minimum_evidence_categories, minimum_independent_sources,
             latent_rules, impact_rules, lineage_rules, gaming_rules, substitute_rules,
@@ -883,6 +890,8 @@ class Seedling(gl.Contract):
         versions = json.loads(self.funding_policy_family_index[family_id])
         if versions[-1] != funding_policy_id:
             raise gl.vm.UserError("EXPECTED: can only version from the latest version of the family")
+        if len(versions) >= MAX_POLICY_VERSIONS_PER_FAMILY:
+            raise gl.vm.UserError("EXPECTED: funding policy version limit reached")
         payload = self._validated_funding_payload(
             name, latent_cap_bps, watching_cap_bps, emerging_cap_bps, material_cap_bps,
             systemic_cap_bps, minimum_public_value_bps, maximum_gaming_risk_bps,
@@ -2912,14 +2921,34 @@ class Seedling(gl.Contract):
     # and the contract owner has NO special power to fabricate or edit history —
     # registration is permissionless and the on-chain submitter is recorded.
     #
-    # GRAPH SAFETY: self-loops (from == to) are rejected; an EXACT duplicate edge
-    # (same candidate, from, to, relationship_type) is rejected. Reciprocal claims
-    # (e.g. "A EXTENDS B" plus "B DOCUMENTS A", or even "A DERIVED_FROM B" plus
-    # "B DERIVED_FROM A") are ALLOWED as distinct directed claims: deciding which
-    # of two contradictory directional claims is true needs semantic causality,
-    # which is an adjudication concern, not a deterministic one. Detecting
-    # contradictory cycles belongs to the later lineage-adjudication stage.
+    # GRAPH SAFETY: self-loops, exact duplicates, and directed cycles are rejected.
+    # Relationship meaning remains a claim for later adjudication, while ancestry
+    # traversal remains structurally finite and unambiguous.
     # ======================================================================
+    def _would_create_lineage_cycle(
+        self, candidate_id: str, from_node_id: str, to_node_id: str
+    ) -> bool:
+        edge_ids = (
+            json.loads(self.candidate_edge_ids[candidate_id])
+            if candidate_id in self.candidate_edge_ids else []
+        )
+        frontier = [to_node_id]
+        visited = []
+        while frontier:
+            current = frontier.pop(0)
+            if current == from_node_id:
+                return True
+            if current in visited:
+                continue
+            visited.append(current)
+            for edge_id in edge_ids:
+                edge = json.loads(self.lineage_edges[edge_id])
+                if edge["from_node_id"] == current:
+                    next_node = edge["to_node_id"]
+                    if next_node not in visited and next_node not in frontier:
+                        frontier.append(next_node)
+        return False
+
     @gl.public.write
     def register_contribution_node(
         self,
@@ -3073,11 +3102,12 @@ class Seedling(gl.Contract):
         # Rule 10 + graph safety: reject an EXACT duplicate edge (same candidate,
         # from, to, relationship_type). Key is injective — candidate_id/from/to are
         # validated decimal ids and relationship_type is an allowlisted [A-Z_]
-        # token, so none contain "|". Reciprocal (mirrored) edges are intentionally
-        # NOT rejected here; see the section header for the documented rationale.
+        # token, so none contain "|".
         dedup_key = candidate_id + "|" + from_node_id + "|" + to_node_id + "|" + relationship_type
         if dedup_key in self.lineage_edge_dedup:
             raise gl.vm.UserError("EXPECTED: duplicate lineage edge (same from, to, relationship)")
+        if self._would_create_lineage_cycle(candidate_id, from_node_id, to_node_id):
+            raise gl.vm.UserError("EXPECTED: lineage edge would create a directed cycle")
         # Rules 11/12: monotonic, collision-safe id; never a silent overwrite.
         n = int(self.lineage_edge_count) + 1
         self.lineage_edge_count = u256(n)
@@ -3453,6 +3483,12 @@ class Seedling(gl.Contract):
         for checkpoint_id in checkpoint_ids:
             if checkpoint_id in self.funding_previews:
                 rec = json.loads(self.funding_previews[checkpoint_id])
+                checkpoint = json.loads(self.checkpoints[checkpoint_id])
+                appeal_id = checkpoint.get("effective_appeal_id", "")
+                if appeal_id and appeal_id in self.appeals:
+                    appeal = json.loads(self.appeals[appeal_id])
+                    if appeal["status"] == "RESOLVED":
+                        rec = appeal["effective_result"]["funding"]
                 recognized = (
                     rec["previously_recognized_funding"]
                     + rec["newly_unlocked_funding"]
@@ -3743,6 +3779,7 @@ class Seedling(gl.Contract):
                 "max_artifact_hash_len": MAX_ARTIFACT_HASH_LEN,
                 "max_appeals_per_candidate": MAX_APPEALS_PER_CANDIDATE,
                 "max_appeal_statement_len": MAX_APPEAL_STATEMENT_LEN,
+                "max_policy_versions_per_family": MAX_POLICY_VERSIONS_PER_FAMILY,
             },
             "conventions": {
                 "null_checkpoint_id": NULL_CHECKPOINT_ID,
@@ -3750,5 +3787,6 @@ class Seedling(gl.Contract):
                 "one_active_checkpoint_per_candidate": True,
                 "funding_calculation_id": "checkpoint_id",
                 "funding_rounding": "floor_then_remainder_to_ascending_node_id",
+                "lineage_graph": "directed_acyclic_claim_graph",
             },
         })

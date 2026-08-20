@@ -46,8 +46,8 @@ pytest tests/ -v
 7. **Public-value adjudication + anti-gaming + substitute analysis** ✅
 8. **Lineage adjudication + contributor attribution** ✅
 9. **Deterministic progressive funding preview** ✅
-10. **Appeals + checkpoint finalization** ✅ *current*
-11. Contract audit + lint + tests + deployment prep
+10. **Appeals + checkpoint finalization** ✅
+11. **Storage bounding, protocol hardening, and release-safety audit** ✅ *current*
 12. Manual Studio deployment + schema verification
 13. Frontend GenLayer integration foundation
 14. Full product frontend
@@ -55,3 +55,29 @@ pytest tests/ -v
 16. GitHub/Vercel release + Portal submission readiness
 
 The repository stays functional after every stage.
+
+## Storage economics and historical integrity
+
+SEEDLING stores compact canonical protocol records on-chain: candidates, immutable
+policy versions, URL/hash evidence references, frozen evidence-ID snapshots,
+adjudication results, contribution claims, funding calculations, appeals, and
+checkpoint finalization references. It does not store fetched page bodies, model
+context, files, token-transfer state, or a private off-chain database.
+
+Every user-controlled string and per-candidate collection is bounded. Evidence,
+checkpoints, contribution nodes, lineage edges, appeals, and policy-family versions
+have deterministic limits. Public list methods clamp pages to 50 records with stable
+creation-order pagination; legacy whole-family policy-history views are safe because
+each family is capped at 32 immutable versions. Global registries remain append-only
+and are read only through bounded pages, preserving protocol utility without building
+unbounded responses.
+
+Frozen evidence snapshots retain IDs and compact diversity metadata rather than
+duplicating evidence bodies. Historical policy IDs remain bound to candidates and
+checkpoints, so later policy versions cannot reprice finalized history. Impact,
+lineage, funding, and appeal records are append-only; effective appeal modifications
+are stored separately from original verdicts. Finalized or voided checkpoints reject
+replay, funding is capped and monotonic, and the claimed lineage graph rejects
+self-loops, duplicates, and directed cycles. Owner authority remains limited to the
+global pause switch; it cannot rewrite evidence, adjudication, lineage, funding, or
+appeal history.

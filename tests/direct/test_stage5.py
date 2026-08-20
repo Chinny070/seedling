@@ -411,19 +411,20 @@ def test_edge_rejects_duplicate_identical_edge(direct_deploy):
     assert eid == "2"
 
 
-def test_edge_reciprocal_claims_allowed(direct_deploy):
-    # Reciprocal (mirrored from/to) edges are distinct directed CLAIMS and are
-    # allowed — resolving contradictory direction is a later adjudication concern.
+def test_edge_reciprocal_claims_rejected_as_cycle(direct_deploy):
+    # Stage 11 hardening keeps the claimed ancestry graph structurally acyclic.
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
     _node(c, ahash="na")                             # node "1"
     _node(c, contributor=ADDR_2, ahash="nb")         # node "2"
     e1 = _edge(c, "1", "1", "2", "FORKED_FROM", [], 6000)
-    e2 = _edge(c, "1", "2", "1", "FORKED_FROM", [], 6000)   # mirror, not exact dup
-    e3 = _edge(c, "1", "2", "1", "DOCUMENTS", [], 4000)     # different reciprocal claim
-    assert [e1, e2, e3] == ["1", "2", "3"]
+    with pytest.raises(Exception):
+        _edge(c, "1", "2", "1", "FORKED_FROM", [], 6000)
+    with pytest.raises(Exception):
+        _edge(c, "1", "2", "1", "DOCUMENTS", [], 4000)
+    assert e1 == "1"
     listing = json.loads(c.list_lineage_edges("1", 0, 50))
-    assert listing["total"] == 3
+    assert listing["total"] == 1
 
 
 def test_edge_rejects_invalid_bps(direct_deploy):
