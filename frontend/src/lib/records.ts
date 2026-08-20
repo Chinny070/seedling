@@ -7,5 +7,7 @@ export interface Node { node_id:string; contributor:string; artifact_type:string
 export interface Edge { edge_id:string; from_node_id:string; to_node_id:string; relationship_type:string; claimed_strength_bps:number }
 export interface Funding { funding_calculation_id:string; checkpoint_id:string; impact_tier:string; target_cumulative_funding:number; previously_recognized_funding:number; newly_unlocked_funding:number; status:string }
 export interface Appeal { appeal_id:string; checkpoint_id:string; ground:string; status:string; decision:string; statement:string }
+export interface ObservationPolicy { policy_id:string; family_id:string; version:number; creator:string; name:string; candidate_types:string[]; minimum_evidence_categories:number; minimum_independent_sources:number; checkpoint_interval:number; status:string }
+export interface FundingPolicy { funding_policy_id:string; family_id:string; version:number; creator:string; name:string; latent_cap_bps:number; watching_cap_bps:number; emerging_cap_bps:number; material_cap_bps:number; systemic_cap_bps:number; minimum_public_value_bps:number; maximum_gaming_risk_bps:number; minimum_attribution_confidence_bps:number; status:string }
 export const bps = (value?:number) => Math.max(0, Math.min(100, (value ?? 0) / 100));
 export const shortAddress = (value:string) => value.length > 12 ? `${value.slice(0,6)}…${value.slice(-4)}` : value;
