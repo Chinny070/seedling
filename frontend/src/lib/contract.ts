@@ -70,6 +70,27 @@ export function normalizeContractResult(value: unknown): unknown {
   try { return JSON.parse(value); } catch { return value; }
 }
 
+const readSubjects: Partial<Record<ViewMethod, string>> = {
+  get_candidate: "Candidate", get_checkpoint: "Checkpoint", get_evidence: "Evidence record",
+  get_latent_assessment: "Latent assessment", get_impact_verdict: "Impact verdict",
+  get_lineage_verdict: "Lineage verdict", get_funding_calculation: "Funding calculation",
+  get_appeal: "Appeal", get_contribution_node: "Contribution node", get_lineage_edge: "Lineage edge",
+  get_observation_policy: "Observation policy", get_funding_policy: "Funding policy",
+};
+
+/** Translate a raw RPC/client failure into product copy without inventing a result. */
+export function describeReadError(method: ViewMethod, args: ContractArg[], error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (/failed to fetch|networkerror|network error|timeout|econn/i.test(raw))
+    return `Could not reach ${NETWORK.name}. Nothing was read, so no cached or substitute data is shown.`;
+  if (/execution failed|missing or invalid parameters|not found|out of range/i.test(raw)) {
+    const subject = readSubjects[method];
+    if (subject) return `${subject}${args.length ? ` #${String(args[0])}` : ""} was not found on the canonical contract.`;
+    return "The canonical contract returned no record for this request.";
+  }
+  return "Contract read failed. No off-chain fallback data is shown.";
+}
+
 export function makeClient(account?: HexAddress, provider?: Provider) {
   return createClient({ chain: studionet, account, provider });
 }

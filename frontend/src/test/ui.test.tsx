@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { CandidateCard, FundingTimeline, LineageGraph } from "../components/UI";
-import { assertWriteOrder, normalizeContractResult } from "../lib/contract";
+import { assertWriteOrder, describeReadError, normalizeContractResult } from "../lib/contract";
 import css from "../styles.css?raw";
 
 describe("routing-ready product components",()=>{
@@ -11,5 +11,7 @@ describe("routing-ready product components",()=>{
  it("renders progressive accounting without claiming token transfers",()=>{render(<FundingTimeline items={[{funding_calculation_id:"1",checkpoint_id:"1",impact_tier:"WATCHING",target_cumulative_funding:500,previously_recognized_funding:0,newly_unlocked_funding:500,status:"CALCULATED"},{funding_calculation_id:"2",checkpoint_id:"2",impact_tier:"MATERIAL",target_cumulative_funding:4000,previously_recognized_funding:500,newly_unlocked_funding:3500,status:"CALCULATED"}]}/>);expect(screen.getByText("+500 accounting units")).toBeInTheDocument();expect(screen.getByText("+3,500 accounting units")).toBeInTheDocument();});
  it("freezes critical ABI write ordering",()=>{expect(assertWriteOrder("register_candidate",["name","description","candidate_type","primary_artifact_url","origin_date","public_access","observation_policy_id","funding_policy_id"])).toBe(true);expect(assertWriteOrder("open_appeal",["candidate_id","checkpoint_id","ground","supporting_refs","statement"])).toBe(true);});
  it("normalizes JSON contract reads without altering scalar returns",()=>{expect(normalizeContractResult('{"items":[],"total":0}')).toEqual({items:[],total:0});expect(normalizeContractResult("FINALIZED")).toBe("FINALIZED");});
+ it("translates raw client failures into product copy without leaking internals",()=>{const viem=new Error("Missing or invalid parameters. Double check you have provided the correct parameters. Details: execution failed Version: viem@2.55.19");const message=describeReadError("get_candidate",["1"],viem);expect(message).toBe("Candidate #1 was not found on the canonical contract.");expect(message).not.toMatch(/viem/i);expect(describeReadError("list_candidates",[0,50],new Error("Failed to fetch"))).toMatch(/Could not reach StudioNet/);});
+ it("keeps primary navigation reachable on small screens",()=>{expect(css).not.toContain(".topbar nav{display:none}");expect(css).toContain(".topbar nav a{white-space:nowrap}");});
  it("contains responsive 375, 768, and desktop rules with overflow-safe grids",()=>{expect(css).toContain("@media(max-width:560px)");expect(css).toContain("@media(max-width:900px)");expect(css).toContain("min-width:320px");expect(css).toContain("overflow:auto");});
 });
