@@ -6,20 +6,19 @@ indexer, or off-chain source of canonical protocol state.
 
 ## Configuration
 
-Copy `.env.example` to `.env.local`. After manually deploying the audited
-contract, set the address you receive from GenLayer Studio:
+Copy `.env.example` to `.env.local`. The checked-in address is the owner's
+canonical manual StudioNet deployment:
 
 ```env
-VITE_SEEDLING_CONTRACT_ADDRESS=0x_YOUR_MANUAL_DEPLOYMENT_ADDRESS
+VITE_SEEDLING_CONTRACT_ADDRESS=0x72C0Ee823D32905f5D0b36a182Cfa526eA2e08aC
 VITE_GENLAYER_NETWORK=studionet
 ```
 
-No fallback or fake address is supplied. The previous Stage 14 address is a
-verification deployment only and is deliberately not configured here. The UI
-displays a clear configuration state if the variable is absent or malformed and
-never substitutes demo records. Do not put wallet private keys in frontend
-environment variables. Deployment readiness and the manual procedure are recorded
-in `../docs/STUDIONET_DEPLOYMENT.md`.
+No fallback or fake address is supplied. The earlier Stage 14 address remains a
+verification deployment only. The UI displays a clear configuration state if the
+canonical variable is absent or malformed and never substitutes demo records. Do
+not put wallet private keys in frontend environment variables. Deployment
+provenance is recorded in `../docs/STUDIONET_DEPLOYMENT.md`.
 
 StudioNet uses GenLayer RPC `https://studio.genlayer.com/api`, chain ID `61999`,
 and currency `GEN`. Network configuration comes from `genlayer-js/chains` rather

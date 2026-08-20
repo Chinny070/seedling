@@ -12,8 +12,8 @@ Frontend + GenLayer Intelligent Contract only. **No backend, no private database
 
 - **Contract** — Python `gl.Contract` (`contracts/seedling.py`)
 - **Frontend** — React/Vite client calling the contract directly through `genlayer-js`.
-- **Deployment** — the Stage 14 address is verification-only. Final canonical
-  StudioNet deployment is pending the owner's manual deployment.
+- **Deployment** — owner-controlled canonical StudioNet contract at
+  `0x72C0Ee823D32905f5D0b36a182Cfa526eA2e08aC` (chain 61999).
 
 GenLayer adjudicates the non-deterministic questions (latent significance, independent reuse, uniqueness, substitutes, realized public value, replacement difficulty, anti-gaming, lineage, contributor attribution, appeals). Deterministic contract logic owns all arithmetic — funding caps, cumulative release, contributor allocation, and policy gates. **No LLM arithmetic, no double release.**
 
@@ -84,8 +84,8 @@ commands, production build, and security boundaries are documented in
 `VITE_SEEDLING_CONTRACT_ADDRESS` is required; no placeholder is treated as a live
 deployment and no demo data is mixed with contract reads.
 
-Verification-deployment provenance, the audited manual-deployment package, and the
-remaining manual checks are documented in
+Canonical and verification deployment provenance, the audited deployment package,
+and the remaining manual checks are documented in
 [`docs/STUDIONET_DEPLOYMENT.md`](docs/STUDIONET_DEPLOYMENT.md).
 
 ## Storage economics and historical integrity

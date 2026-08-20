@@ -1,11 +1,30 @@
-# StudioNet verification deployment and manual deployment package
+# Canonical StudioNet deployment
+
+## Owner-controlled canonical deployment
+
+- Network: GenLayer StudioNet
+- Chain ID: `61999`
+- RPC: `https://studio.genlayer.com/api`
+- Contract: `0x72C0Ee823D32905f5D0b36a182Cfa526eA2e08aC`
+- Owner: `0xaffE15eEc45b68835cc9E5B4Ab85dD5deaE8e70b`
+- Deployment method: manually deployed by the owner in GenLayer Studio
+- Constructor: `Seedling()` with zero arguments
+- Source SHA-256: `4fb7bb560c445d35c180f62c067624905386431f5bb0311aac3b19193cbb7873`
+- Git blob hash: `8af172dc01fac4da64a10dc61c8e659c32fcbf48`
+
+Live verification confirmed `name: SEEDLING`, `paused: false`, protocol/spec
+version 1, empty initial state, the owner above, and the expected zero-argument,
+56-method ABI. The deployment transaction hash was not supplied and is therefore
+not asserted here.
+
+## Earlier verification deployment
 
 SEEDLING was deployed exactly once for Stage 14 from the frozen Stage 13 contract.
 That deployment is verification-only and is **not** the final canonical submission
 deployment. No constructor arguments or production records were supplied. The
-owner will perform the final deployment manually in GenLayer Studio.
+owner subsequently performed the canonical deployment manually in GenLayer Studio.
 
-## Provenance
+### Verification provenance
 
 - Network: GenLayer StudioNet
 - Chain ID: `61999`
@@ -71,8 +90,8 @@ other production records merely to populate read results.
 ## Frontend binding
 
 The single frontend configuration path remains
-`VITE_SEEDLING_CONTRACT_ADDRESS`. It is intentionally blank in
-`frontend/.env.example` until the owner supplies the manually deployed address.
+`VITE_SEEDLING_CONTRACT_ADDRESS`. `frontend/.env.example` contains the canonical
+owner-controlled address.
 StudioNet configuration comes from `genlayer-js/chains` and targets chain 61999.
 There is no backend, database, indexer, private key, or fake-data fallback.
 
