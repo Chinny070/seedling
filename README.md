@@ -15,6 +15,12 @@ Frontend + GenLayer Intelligent Contract only. **No backend, no private database
 - **Deployment** — owner-controlled canonical StudioNet contract at
   `0x72C0Ee823D32905f5D0b36a182Cfa526eA2e08aC` (chain 61999).
 
+## Production
+
+- Frontend: https://seedling-lovat.vercel.app
+- Source: https://github.com/Chinny070/seedling
+- Canonical contract: `0x72C0Ee823D32905f5D0b36a182Cfa526eA2e08aC`
+
 GenLayer adjudicates the non-deterministic questions (latent significance, independent reuse, uniqueness, substitutes, realized public value, replacement difficulty, anti-gaming, lineage, contributor attribution, appeals). Deterministic contract logic owns all arithmetic — funding caps, cumulative release, contributor allocation, and policy gates. **No LLM arithmetic, no double release.**
 
 ## Verified GenLayer API surface

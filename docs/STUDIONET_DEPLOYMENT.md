@@ -17,6 +17,9 @@ version 1, empty initial state, the owner above, and the expected zero-argument,
 56-method ABI. The deployment transaction hash was not supplied and is therefore
 not asserted here.
 
+Production frontend: https://seedling-lovat.vercel.app  
+Source repository: https://github.com/Chinny070/seedling
+
 ## Earlier verification deployment
 
 SEEDLING was deployed exactly once for Stage 14 from the frozen Stage 13 contract.
