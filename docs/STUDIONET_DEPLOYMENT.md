@@ -1,6 +1,75 @@
 # Canonical StudioNet deployment
 
-## Owner-controlled canonical deployment
+## Current canonical deployment
+
+- Network: GenLayer StudioNet
+- Chain ID: `61999`
+- RPC: `https://studio.genlayer.com/api`
+- Contract: `0x9f4675FfA027eBB82Bb60182F40FDBAB7038F766`
+- Owner: `0xaffE15eEc45b68835cc9E5B4Ab85dD5deaE8e70b`
+- Deployment method: manually deployed by the owner
+- Constructor: `Seedling()` with zero arguments
+- Source SHA-256: `e5375ac518994d9d73ff9f60214fd4822617d0f36d5d69bc1193ae971dbfd3a4`
+- Git blob hash: `d485304d6e463f7e9167d9000e8131e1c1da2cbe`
+- Deployed: 2026-08-21
+
+Verified live after deployment: `name: SEEDLING`, `owner` as above,
+`paused: false`, protocol/spec version 1, all eleven counters at zero, and an
+on-chain schema of exactly 56 methods (33 view, 23 write) with a zero-argument
+constructor — ABI-identical to the superseded deployment.
+
+### Why this deployment exists
+
+The superseded contract could not complete its own latent adjudication step.
+Its equivalence principle for `evaluate_latent_value` required two independent
+validator runs to produce *the same set of reason codes*. The latent vocabulary
+holds 21 codes and a verdict selects roughly seven, so agreement demanded an
+identical choice out of 116,280 possible subsets.
+
+Three adjudication attempts were made against the superseded contract, across
+two candidates and two unrelated classes of evidence source (rendered HTML, and
+plain-text files served from three separate hosts). Every attempt returned
+GenVM `SUCCESS` with a complete, well-formed verdict, and every attempt ended
+`Undetermined` after exhausting three rotations across five validators. On one
+candidate two separate runs produced *identical* basis-point scores and the same
+seven reason codes in a different order, which showed the 500 bps score
+tolerance was never the binding constraint — only the exact-set requirement was.
+
+This deployment changes exactly one string: the `evaluate_latent_value`
+equivalence principle. Validators must now agree on direction (whether
+`latent_value_bps` and `gaming_risk_bps` fall above or below 5000), on scores
+within 1000 bps, and on the same set of cited evidence references in any order.
+Reason codes must come from the allowed vocabulary and overlap substantially,
+but need not match exactly and carry no ordering meaning.
+
+No storage layout, method signature, validation rule, or ABI entry changed.
+`_validate_latent_verdict` still enforces the reason-code vocabulary and the
+evidence-reference allowlist after consensus, so the post-consensus safety
+properties are unchanged.
+
+### Known remaining risk
+
+`evaluate_public_value` requires `reason_codes` to "agree semantically" across a
+24-code vocabulary. That wording is looser than the superseded latent principle
+and may well hold, but it is the same shape of constraint and it is unproven.
+It was deliberately left unchanged rather than weakened without evidence. If
+public-value adjudication proves unreachable in the same way, that finding
+should be recorded here before any further deployment.
+
+## Superseded canonical deployment
+
+Retained as the record of the finding above. Still live and unpaused; it holds
+two candidates, six evidence records, and one policy of each kind. It must not
+be used as the frontend or submission address.
+
+- Contract: `0x72C0Ee823D32905f5D0b36a182Cfa526eA2e08aC`
+- Source SHA-256: `4fb7bb560c445d35c180f62c067624905386431f5bb0311aac3b19193cbb7873`
+- Git blob hash: `8af172dc01fac4da64a10dc61c8e659c32fcbf48`
+- Deployed: 2026-08-20
+
+## Original owner-controlled deployment notes
+
+### Owner-controlled canonical deployment (superseded)
 
 - Network: GenLayer StudioNet
 - Chain ID: `61999`

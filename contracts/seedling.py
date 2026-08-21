@@ -1754,10 +1754,13 @@ class Seedling(gl.Contract):
 
         principle = (
             "Both responses must be valid JSON verdicts that reach the same latent "
-            "conclusion: the same set of reason codes, the same set of cited "
-            "evidence references, and each corresponding basis-point score within "
-            "500 bps of the other. Minor wording differences in the summary text "
-            "are acceptable."
+            "conclusion. They must agree on direction: whether latent_value_bps is "
+            "above or below 5000, and whether gaming_risk_bps is above or below "
+            "5000. Each corresponding basis-point score must be within 1000 bps of "
+            "the other. They must cite the same set of evidence references, in any "
+            "order. Reason codes must be drawn from the allowed vocabulary and "
+            "overlap substantially, but need not match exactly, and their order "
+            "carries no meaning. Differences in summary wording are acceptable."
         )
         raw = gl.eq_principle.prompt_comparative(run_evaluation, principle)
 
