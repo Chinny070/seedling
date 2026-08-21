@@ -1,7 +1,7 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { makeClient, NETWORK, type HexAddress, type TxState } from "../lib/contract";
 
-type Provider = { request(args:{method:string;params?:unknown[]}):Promise<unknown>; on?(event:string, fn:(value:unknown)=>void):void };
+type Provider = { request(args:{method:string;params?:unknown[]}):Promise<unknown>; on?(event:string, fn:(value:unknown)=>void):void; removeListener?(event:string, fn:(value:unknown)=>void):void };
 interface WalletValue { account?:HexAddress; provider?:Provider; connecting:boolean; wrongNetwork:boolean; error?:string; tx:TxState; setTx(value:TxState):void; connect():Promise<void>; switchNetwork():Promise<void> }
 const WalletContext = createContext<WalletValue | null>(null);
 
@@ -20,6 +20,17 @@ export function WalletProvider({children}:{children:ReactNode}) {
     } catch(e){ setError(e instanceof Error?e.message:"Wallet connection failed."); }
     finally { setConnecting(false); }
   }
+  useEffect(()=>{
+    if(!provider?.on) return;
+    const onAccounts=(value:unknown)=>{
+      const list=Array.isArray(value)?value as HexAddress[]:[];
+      if(!list.length){ setAccount(undefined); setProvider(undefined); setWrongNetwork(false); setTx({phase:"idle"}); return; }
+      setAccount(list[0]);
+    };
+    const onChain=(value:unknown)=>{ setWrongNetwork(parseInt(String(value),16)!==NETWORK.id); };
+    provider.on("accountsChanged",onAccounts); provider.on("chainChanged",onChain);
+    return ()=>{ provider.removeListener?.("accountsChanged",onAccounts); provider.removeListener?.("chainChanged",onChain); };
+  },[provider]);
   async function switchNetwork(){
     if(!provider||!account) return;
     try { await makeClient(account,provider).connect("studionet"); setWrongNetwork(false); }
