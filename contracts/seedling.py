@@ -2374,9 +2374,12 @@ class Seedling(gl.Contract):
 
         principle = (
             "Validators independently reconstruct causal contribution lineage from the same on-chain "
-            "graph and sources. Equivalent results must identify the same material nodes, total exactly "
-            "10000 attribution BPS, use semantically compatible reasons/evidence, and differ by no more "
-            "than 500 BPS per included node and in attribution confidence."
+            "graph and sources. Equivalent results must identify the same material nodes and each "
+            "verdict's attribution_bps values must sum to exactly 10000. For every node, both verdicts "
+            "must agree on which single node received the largest share. Each node's attribution_bps "
+            "must be within 1500 of the other verdict's value for that node, and attribution_confidence_bps "
+            "must be within 1500. Reasons and evidence must be semantically compatible but need not match "
+            "exactly."
         )
         raw = gl.eq_principle.prompt_comparative(run_evaluation, principle)
         verdict = self._validate_lineage_verdict(

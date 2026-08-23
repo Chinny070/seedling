@@ -5,67 +5,79 @@
 - Network: GenLayer StudioNet
 - Chain ID: `61999`
 - RPC: `https://studio.genlayer.com/api`
-- Contract: `0x9f4675FfA027eBB82Bb60182F40FDBAB7038F766`
+- Contract: `0xA01aF2fc2fd41775A0F6f4C64d4064B3b98354f8`
 - Owner: `0xaffE15eEc45b68835cc9E5B4Ab85dD5deaE8e70b`
 - Deployment method: manually deployed by the owner
 - Constructor: `Seedling()` with zero arguments
-- Source SHA-256: `e5375ac518994d9d73ff9f60214fd4822617d0f36d5d69bc1193ae971dbfd3a4`
-- Git blob hash: `d485304d6e463f7e9167d9000e8131e1c1da2cbe`
-- Deployed: 2026-08-21
+- Source SHA-256: `9e6213328072b3a83e680e7186d5e758f5952dc684fc2c05d72e6b71e7c86462`
+- Git blob hash: `42f4e7a755c01fb5b8cb66ebfe45702b7980b419`
+- Deployed: 2026-08-23
 
 Verified live after deployment: `name: SEEDLING`, `owner` as above,
 `paused: false`, protocol/spec version 1, all eleven counters at zero, and an
 on-chain schema of exactly 56 methods (33 view, 23 write) with a zero-argument
-constructor — ABI-identical to the superseded deployment.
+constructor — ABI-identical to the superseded deployments.
 
 ### Why this deployment exists
 
-The superseded contract could not complete its own latent adjudication step.
-Its equivalence principle for `evaluate_latent_value` required two independent
-validator runs to produce *the same set of reason codes*. The latent vocabulary
-holds 21 codes and a verdict selects roughly seven, so agreement demanded an
-identical choice out of 116,280 possible subsets.
+The previous deployment's latent-adjudication fix held (proven across two
+candidates, including a contested case needing retries) and its
+`evaluate_public_value` principle held on the first real attempt, reaching a
+`SYSTEMIC` verdict cleanly. But `evaluate_lineage` still carried its original,
+unmodified equivalence principle, requiring agreement within 500 bps per node
+on a genuinely subjective attribution split (two contribution nodes shared the
+same submitter address, giving the model no independent identity signal to
+anchor the split).
 
-Three adjudication attempts were made against the superseded contract, across
-two candidates and two unrelated classes of evidence source (rendered HTML, and
-plain-text files served from three separate hosts). Every attempt returned
-GenVM `SUCCESS` with a complete, well-formed verdict, and every attempt ended
-`Undetermined` after exhausting three rotations across five validators. On one
-candidate two separate runs produced *identical* basis-point scores and the same
-seven reason codes in a different order, which showed the 500 bps score
-tolerance was never the binding constraint — only the exact-set requirement was.
+Two consecutive attempts against the previous contract returned GenVM
+`SUCCESS` with complete, well-formed, individually reasonable verdicts —
+62%/38% and 68%/32% splits, a 600 bps difference — and both ended
+`Undetermined`. Two further attempts failed for other reasons first
+(malformed JSON output, an oversized summary field), each a clean rollback
+with nothing written.
 
-This deployment changes exactly one string: the `evaluate_latent_value`
-equivalence principle. Validators must now agree on direction (whether
-`latent_value_bps` and `gaming_risk_bps` fall above or below 5000), on scores
-within 1000 bps, and on the same set of cited evidence references in any order.
-Reason codes must come from the allowed vocabulary and overlap substantially,
-but need not match exactly and carry no ordering meaning.
+This deployment changes exactly one string: the `evaluate_lineage`
+equivalence principle. Validators must still identify the same material
+nodes and their allocations must still sum to exactly 10000 bps, and must
+now additionally agree on which single node received the largest share —
+a stronger directional constraint than before. But the per-node and
+confidence tolerance widens from 500 to 1500 bps, wide enough to admit both
+observed real splits while still catching genuine disagreement about which
+node actually dominates.
 
 No storage layout, method signature, validation rule, or ABI entry changed.
-`_validate_latent_verdict` still enforces the reason-code vocabulary and the
-evidence-reference allowlist after consensus, so the post-consensus safety
+`_validate_lineage_verdict` still enforces the exact-10000 sum and
+node-existence checks after consensus, so the post-consensus safety
 properties are unchanged.
 
 ### Known remaining risk
 
-`evaluate_public_value` requires `reason_codes` to "agree semantically" across a
-24-code vocabulary. That wording is looser than the superseded latent principle
-and may well hold, but it is the same shape of constraint and it is unproven.
-It was deliberately left unchanged rather than weakened without evidence. If
-public-value adjudication proves unreachable in the same way, that finding
-should be recorded here before any further deployment.
+None currently unproven. Latent, public-value, and lineage adjudication have
+each been exercised against real evidence on this line of deployments and
+reached consensus. `evaluate_appeal` has not yet been exercised and carries
+an unmodified original principle; if appeal adjudication proves unreachable
+in the same way, that finding should be recorded here before any further
+deployment.
 
-## Superseded canonical deployment
+## Superseded canonical deployments
 
-Retained as the record of the finding above. Still live and unpaused; it holds
-two candidates, six evidence records, and one policy of each kind. It must not
-be used as the frontend or submission address.
+Retained as the record of the findings above. Neither should be used as the
+frontend or submission address.
+
+- Contract: `0x9f4675FfA027eBB82Bb60182F40FDBAB7038F766`
+- Source SHA-256: `e5375ac518994d9d73ff9f60214fd4822617d0f36d5d69bc1193ae971dbfd3a4`
+- Git blob hash: `d485304d6e463f7e9167d9000e8131e1c1da2cbe`
+- Deployed: 2026-08-21 — superseded 2026-08-23 (lineage adjudication fix)
+- Holds: two candidates (c-ares, curl), twelve evidence records, one
+  checkpoint each, one finalized latent assessment each, one finalized
+  impact verdict (curl, SYSTEMIC), two contribution nodes and one lineage
+  edge on curl, one policy of each kind
 
 - Contract: `0x72C0Ee823D32905f5D0b36a182Cfa526eA2e08aC`
 - Source SHA-256: `4fb7bb560c445d35c180f62c067624905386431f5bb0311aac3b19193cbb7873`
 - Git blob hash: `8af172dc01fac4da64a10dc61c8e659c32fcbf48`
-- Deployed: 2026-08-20
+- Deployed: 2026-08-20 — superseded 2026-08-21 (latent adjudication fix)
+- Holds: two candidates, six evidence records, one policy of each kind
 
 ## Original owner-controlled deployment notes
 

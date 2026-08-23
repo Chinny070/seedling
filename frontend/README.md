@@ -10,7 +10,7 @@ Copy `.env.example` to `.env.local`. The checked-in address is the owner's
 canonical manual StudioNet deployment:
 
 ```env
-VITE_SEEDLING_CONTRACT_ADDRESS=0x9f4675FfA027eBB82Bb60182F40FDBAB7038F766
+VITE_SEEDLING_CONTRACT_ADDRESS=0xA01aF2fc2fd41775A0F6f4C64d4064B3b98354f8
 VITE_GENLAYER_NETWORK=studionet
 ```
 
