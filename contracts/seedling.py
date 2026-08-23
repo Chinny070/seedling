@@ -2041,9 +2041,12 @@ class Seedling(gl.Contract):
 
         principle = (
             "The validator must independently assess realized public value from the same frozen "
-            "checkpoint evidence. The result is equivalent only when importance_tier, reason_codes, "
-            "and evidence_refs agree semantically and each basis-point score differs by no more than "
-            "500. Latent potential must not substitute for demonstrated checkpoint impact."
+            "checkpoint evidence. Both results must agree on importance_tier and on direction for "
+            "each score: whether public_value_bps and gaming_risk_bps fall above or below 5000. "
+            "Each basis-point score must be within 1500 of the other. They must cite the same set "
+            "of evidence references, in any order. Reason codes must overlap substantially but need "
+            "not match exactly. Latent potential must not substitute for demonstrated checkpoint "
+            "impact."
         )
         raw = gl.eq_principle.prompt_comparative(run_evaluation, principle)
         verdict = self._validate_impact_verdict(raw, package["evidence_ids"])

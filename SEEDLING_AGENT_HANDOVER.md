@@ -12,8 +12,9 @@ deployment.
 ## 1. Non-negotiable production facts
 
 - Canonical GenLayer contract:
-  `0x98bEbFDf7E119551De3F83CC89b1b61130ECFf70`
+  `0x05f43D86d7fa8044647073D089652F3Bbb619fE6`
 - Superseded (still live, holds earlier records, do not use):
+  `0x98bEbFDf7E119551De3F83CC89b1b61130ECFf70`
   `0xA01aF2fc2fd41775A0F6f4C64d4064B3b98354f8`
   `0x9f4675FfA027eBB82Bb60182F40FDBAB7038F766`
   `0x72C0Ee823D32905f5D0b36a182Cfa526eA2e08aC`
@@ -29,9 +30,9 @@ deployment.
 - Contract constructor: `Seedling()` with **zero arguments**.
 - Contract ABI: 56 public methods: 33 views and 23 writes.
 - Audited contract SHA-256:
-  `44BDA47A16F6D27213E42E01C82537C4A6E48A083FAF2DE999D45CB016A35E1B`
+  `ACC1A4B04A699F87440A36C0604A17CBD2BAE0BE730E18ADF65D162A66F7876C`
 - Git blob hash for `contracts/seedling.py`:
-  `2f5b341d5bbc4bdb3152b9ece19b0416d1b4e62c`
+  `70f315b96285c47818c1e44acf9ede10b0d1ceab`
 
 Do not deploy or redeploy the contract, change the canonical address, push code,
 or redeploy Vercel unless the user explicitly authorizes that exact action.
@@ -211,7 +212,7 @@ Canonical manual-deployment and release commits:
 The frontend uses one contract-address configuration path:
 
 ```env
-VITE_SEEDLING_CONTRACT_ADDRESS=0x98bEbFDf7E119551De3F83CC89b1b61130ECFf70
+VITE_SEEDLING_CONTRACT_ADDRESS=0x05f43D86d7fa8044647073D089652F3Bbb619fE6
 VITE_GENLAYER_NETWORK=studionet
 ```
 
@@ -306,11 +307,11 @@ place, and frontend dependency changes should be tested against StudioNet behavi
 Read-only CLI examples:
 
 ```powershell
-genlayer call 0x98bEbFDf7E119551De3F83CC89b1b61130ECFf70 get_protocol_info
-genlayer call 0x98bEbFDf7E119551De3F83CC89b1b61130ECFf70 list_candidates --args 0 10
-genlayer call 0x98bEbFDf7E119551De3F83CC89b1b61130ECFf70 list_observation_policies --args 0 10
-genlayer call 0x98bEbFDf7E119551De3F83CC89b1b61130ECFf70 list_funding_policies --args 0 10
-genlayer schema 0x98bEbFDf7E119551De3F83CC89b1b61130ECFf70
+genlayer call 0x05f43D86d7fa8044647073D089652F3Bbb619fE6 get_protocol_info
+genlayer call 0x05f43D86d7fa8044647073D089652F3Bbb619fE6 list_candidates --args 0 10
+genlayer call 0x05f43D86d7fa8044647073D089652F3Bbb619fE6 list_observation_policies --args 0 10
+genlayer call 0x05f43D86d7fa8044647073D089652F3Bbb619fE6 list_funding_policies --args 0 10
+genlayer schema 0x05f43D86d7fa8044647073D089652F3Bbb619fE6
 ```
 
 At handover the canonical deployment was intentionally empty: candidate,

@@ -13,13 +13,13 @@ Frontend + GenLayer Intelligent Contract only. **No backend, no private database
 - **Contract** — Python `gl.Contract` (`contracts/seedling.py`)
 - **Frontend** — React/Vite client calling the contract directly through `genlayer-js`.
 - **Deployment** — owner-controlled canonical StudioNet contract at
-  `0x98bEbFDf7E119551De3F83CC89b1b61130ECFf70` (chain 61999).
+  `0x05f43D86d7fa8044647073D089652F3Bbb619fE6` (chain 61999).
 
 ## Production
 
 - Frontend: https://seedling-lovat.vercel.app
 - Source: https://github.com/Chinny070/seedling
-- Canonical contract: `0x98bEbFDf7E119551De3F83CC89b1b61130ECFf70`
+- Canonical contract: `0x05f43D86d7fa8044647073D089652F3Bbb619fE6`
 
 GenLayer adjudicates the non-deterministic questions (latent significance, independent reuse, uniqueness, substitutes, realized public value, replacement difficulty, anti-gaming, lineage, contributor attribution, appeals). Deterministic contract logic owns all arithmetic — funding caps, cumulative release, contributor allocation, and policy gates. **No LLM arithmetic, no double release.**
 

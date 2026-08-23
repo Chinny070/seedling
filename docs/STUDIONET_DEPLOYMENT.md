@@ -5,12 +5,12 @@
 - Network: GenLayer StudioNet
 - Chain ID: `61999`
 - RPC: `https://studio.genlayer.com/api`
-- Contract: `0x98bEbFDf7E119551De3F83CC89b1b61130ECFf70`
+- Contract: `0x05f43D86d7fa8044647073D089652F3Bbb619fE6`
 - Owner: `0xaffE15eEc45b68835cc9E5B4Ab85dD5deaE8e70b`
 - Deployment method: manually deployed by the owner
 - Constructor: `Seedling()` with zero arguments
-- Source SHA-256: `44bda47a16f6d27213e42e01c82537c4a6e48a083faf2de999d45cb016a35e1b`
-- Git blob hash: `2f5b341d5bbc4bdb3152b9ece19b0416d1b4e62c`
+- Source SHA-256: `acc1a4b04a699f87440a36c0604a17cbd2bae0be730e18adf65d162a66f7876c`
+- Git blob hash: `70f315b96285c47818c1e44acf9ede10b0d1ceab`
 - Deployed: 2026-08-23
 
 Verified live after deployment: `name: SEEDLING`, `owner` as above,
@@ -20,48 +20,51 @@ constructor — ABI-identical to the superseded deployments.
 
 ### Why this deployment exists
 
-The previous deployment's latent, public-value, and lineage adjudication all
-held under real evidence. `evaluate_appeal` was then exercised for the first
-time and failed on four consecutive attempts, in two distinct and reproducible
-ways:
+The previous deployment's `evaluate_public_value` principle was believed
+proven after one clean success on the earlier deployment. Real testing
+against this deployment showed otherwise: 8 consecutive attempts against
+the unmodified principle failed (a mix of `Undetermined` consensus and clean
+rollbacks from oversized summaries), against 5 attempts needed to succeed
+once on the prior deployment — roughly 5 successes in 13+ attempts overall.
+The principle carried the same shape of fragility already found and fixed
+in the latent and lineage principles: a tight fixed basis-point tolerance
+(500) combined with loosely specified "semantic" agreement across several
+independent scores, rather than a directional and proportionally wider
+tolerance.
 
-1. The appeal prompt never told the model a character limit for the summary
-   field — unlike every other adjudication prompt in the contract, which
-   states the limit explicitly. Every attempt that reached a well-formed
-   verdict overran `MAX_APPEAL_STATEMENT_LEN` (1000) and rolled back.
-2. Separately, and more importantly: the prompt described `UPHOLD` as
-   preserving the original verdict, but never instructed the model that this
-   was a literal, contract-enforced requirement. Every attempt that chose
-   `UPHOLD` also recalculated `contributors` from scratch — consistently
-   landing on a 65/35 split against the frozen lineage verdict's actual
-   50/50 — which the contract correctly rejects, since an `UPHOLD` decision
-   is required to reuse the original tier, confidence, and contributor
-   allocation exactly.
+This deployment changes exactly one string: the `evaluate_public_value`
+equivalence principle. Validators must now agree on `importance_tier`
+exactly, and on direction for `public_value_bps` and `gaming_risk_bps`
+(above or below 5000), with each basis-point score within 1500 of the
+other and the same set of evidence references cited in any order. Reason
+codes must overlap substantially but need not match exactly.
 
-Both failures were fully reproducible across all four attempts, not sampling
-variance: the missing length instruction and the missing preservation
-instruction are content gaps in the prompt, not principle-tolerance issues.
-
-This deployment changes only prompt text inside `evaluate_appeal`: it adds
-the summary length instruction, and makes the `UPHOLD` requirement explicit
-and binding rather than descriptive. The equivalence principle for appeals
-is unchanged. No storage layout, method signature, validation rule, or ABI
-entry changed. `_validate_appeal_result` and the `UPHOLD`-preservation check
-in `evaluate_appeal` still enforce the same invariants after consensus.
+No storage layout, method signature, validation rule, or ABI entry changed.
+`_validate_impact_verdict` still enforces the same allowlists and shape
+after consensus. The `evaluate_appeal` prompt fix from the previous
+deployment carries forward unchanged.
 
 ### Known remaining risk
 
-None currently identified from real testing. Latent, public-value, and
-lineage adjudication have each been exercised against real evidence across
-this line of deployments and reached consensus. Appeal adjudication has not
-yet been re-tested against this fix; if the prompt fix does not fully resolve
-the `UPHOLD` behavior, that finding should be recorded here before any
-further deployment.
+Appeal adjudication (`evaluate_appeal`) has a prompt fix from the previous
+deployment (explicit UPHOLD-preservation instruction, explicit summary
+length cap) that has not yet been exercised against a live run on any
+deployment. If it fails in the same ways again despite the fix, or in a new
+way, that finding should be recorded here before any further deployment.
 
 ## Superseded canonical deployments
 
 Retained as the record of the findings above. None should be used as the
 frontend or submission address.
+
+- Contract: `0x98bEbFDf7E119551De3F83CC89b1b61130ECFf70`
+- Source SHA-256: `44bda47a16f6d27213e42e01c82537c4a6e48a083faf2de999d45cb016a35e1b`
+- Git blob hash: `2f5b341d5bbc4bdb3152b9ece19b0416d1b4e62c`
+- Deployed: 2026-08-23 — superseded 2026-08-23 (public-value adjudication fix)
+- Holds: one candidate (curl), six evidence records, one checkpoint, one
+  finalized latent assessment, no finalized impact verdict (8 consecutive
+  `evaluate_public_value` attempts failed against the unmodified principle),
+  one policy of each kind
 
 - Contract: `0xA01aF2fc2fd41775A0F6f4C64d4064B3b98354f8`
 - Source SHA-256: `9e6213328072b3a83e680e7186d5e758f5952dc684fc2c05d72e6b71e7c86462`
