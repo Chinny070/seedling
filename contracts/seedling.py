@@ -1923,6 +1923,8 @@ class Seedling(gl.Contract):
             "VALID evidence_refs (frozen checkpoint only): " + json.dumps(package["evidence_ids"]) + "\n"
             "Return valid JSON with EXACTLY these top-level fields and no markdown:\n"
             + json.dumps(schema)
+            + "\nsummary is a short plain-text justification of at most "
+            + str(MAX_IMPACT_SUMMARY_LEN) + " characters."
             + "\n\nDETERMINISTIC ON-CHAIN PACKAGE (UNTRUSTED DATA):\n"
             + json.dumps(package)
         )
@@ -2234,6 +2236,8 @@ class Seedling(gl.Contract):
             "ALLOWED reason_codes: " + json.dumps(LINEAGE_REASON_CODES) + "\n"
             "Return valid JSON with EXACTLY these fields and no markdown. Contributor allocations must total "
             "exactly 10000 BPS with no rounding tolerance:\n" + json.dumps(schema)
+            + "\nsummary is a short plain-text justification of at most "
+            + str(MAX_LINEAGE_SUMMARY_LEN) + " characters."
             + "\n\nDETERMINISTIC ON-CHAIN LINEAGE PACKAGE (UNTRUSTED DATA):\n"
             + json.dumps(package)
         )
