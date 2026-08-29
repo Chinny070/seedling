@@ -1,5 +1,48 @@
 # Canonical StudioNet deployment
 
+## Pending redeployment (evidence integrity + finalization surface)
+
+The contract below is **not yet deployed**. It supersedes the canonical
+deployment for the first consensus-affecting reason since the prompt fixes:
+evidence integrity is now enforced on both halves of its lifecycle.
+
+- Source SHA-256: `43137aa662751edab6b1f4393521daced1c65b8ec5cd8cf418c088152fafbb7e`
+  (hashed with LF line endings, as the file is stored in git)
+- Git blob hash: `75aebb16db1797eb7dc78d8b9fc36c9a4f9a868a`
+- Public ABI: unchanged — 56 methods (33 views, 23 writes), zero-argument
+  `Seedling()` constructor
+
+What changed, and why it cannot be verified on the existing deployment:
+
+1. **Submission time.** Evidence, checkpoint evidence, and contribution
+   artifacts must now be raw Wayback snapshot URLs (`/web/<ts>id_/<origin>`),
+   so the bytes behind a submitted URL cannot change after submission. The
+   embedded origin URL is what source independence and duplicate detection are
+   measured against, so archiving does not collapse every source onto
+   `web.archive.org`.
+2. **Adjudication time.** All four adjudication paths now verify the rendered
+   text against the submitted `content_hash`/`artifact_hash` via
+   `_render_digest`, and a mismatch or failed render aborts the transaction.
+   Previously a failed render silently degraded to `[content unavailable]`,
+   which meant judging content nobody had attested to.
+
+Both rules are consensus-affecting and reject data the existing deployment
+accepts, so the existing deployment's records cannot be migrated. The new
+deployment starts empty and the lifecycle must be re-exercised end to end.
+
+The frontend also now exposes `finalize_checkpoint`, which existed on-chain
+from the start but had no UI surface — without it the repeated funding
+lifecycle could not be completed from the product. That change is frontend-only
+and needs no redeployment on its own.
+
+### Deployment procedure
+
+Identical to the manual procedure at the end of this document: paste the whole
+of `contracts/seedling.py` into GenLayer Studio on StudioNet (chain `61999`),
+class `Seedling`, no constructor arguments, deploy once from the owner wallet,
+then record the address and transaction hash here and set
+`VITE_SEEDLING_CONTRACT_ADDRESS` to the new address.
+
 ## Current canonical deployment
 
 - Network: GenLayer StudioNet

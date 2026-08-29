@@ -2,6 +2,7 @@ export interface Candidate { candidate_id:string; name:string; description:strin
 export interface Page<T> { items:T[]; total:number }
 export interface LatentAssessment { latent_value_bps:number; independent_reuse_bps:number; uniqueness_bps:number; substitution_risk_bps:number; maintainer_health_bps:number; ecosystem_positioning_bps:number; gaming_risk_bps:number; reason_codes:string[]; summary:string }
 export interface Checkpoint { checkpoint_id:string; candidate_id:string; period_start:number; period_end:number; status:string; evidence_count:number; impact_verdict_id:string; lineage_verdict_id:string; appeal_id:string }
+export interface CheckpointFinalization { checkpoint_id:string; candidate_id:string; status:string; finalized:boolean; finalized_at:number; effective_appeal_id:string; effective_impact_verdict_id:string; effective_lineage_verdict_id:string; effective_funding_calculation_id:string }
 export interface Evidence { evidence_id:string; source_type:string; source_url:string; source_host:string; summary:string; status:string; checkpoint_id:string }
 export interface Node { node_id:string; contributor:string; artifact_type:string; artifact_url:string; role:string; summary:string }
 export interface Edge { edge_id:string; from_node_id:string; to_node_id:string; relationship_type:string; claimed_strength_bps:number }

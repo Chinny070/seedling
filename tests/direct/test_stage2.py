@@ -10,6 +10,8 @@ Run:  pytest tests/ -v
 import json
 import pytest
 
+from tests.direct._archive import wb, render_digest, EVIDENCE_BODY, EVIDENCE_DIGEST
+
 CONTRACT = "contracts/seedling.py"
 
 
@@ -37,7 +39,7 @@ def _make_funding_policy(c, name="Funding Policy A",
 
 
 def _register(c, obs="1", fund="1", ctype="OPEN_SOURCE_LIBRARY",
-              url="https://example.com/libfoo", name="libfoo"):
+              url=wb("https://example.com/libfoo"), name="libfoo"):
     return c.register_candidate(
         name, "A small but foundational library", ctype,
         url, "2020-01-01", True, obs, fund,
@@ -242,7 +244,7 @@ def test_register_candidate_happy_path(direct_deploy, direct_owner):
     assert cand["candidate_id"] == "1"
     assert cand["status"] == "DISCOVERED"
     assert cand["candidate_type"] == "OPEN_SOURCE_LIBRARY"
-    assert cand["primary_artifact_url"] == "https://example.com/libfoo"
+    assert cand["primary_artifact_url"] == wb("https://example.com/libfoo")
     assert cand["public_access"] is True
     assert cand["observation_policy_id"] == "1"
     assert cand["funding_policy_id"] == "1"

@@ -5,6 +5,8 @@ import json
 import pytest
 
 
+from tests.direct._archive import wb, render_digest, EVIDENCE_BODY, EVIDENCE_DIGEST
+
 CONTRACT = "contracts/seedling.py"
 LATENT_MATCH = "adjudicator for SEEDLING"
 IMPACT_MATCH = "realized-public-value adjudicator for SEEDLING"
@@ -62,34 +64,34 @@ def _prepare(
         "fund", caps[0], caps[1], caps[2], caps[3], caps[4], 2000, 3000, 6000,
     )
     cid = c.register_candidate(
-        "cand", "desc", "OPEN_SOURCE_LIBRARY", "https://artifact.example.com/c",
+        "cand", "desc", "OPEN_SOURCE_LIBRARY", wb("https://artifact.example.com/c"),
         "2020-01-01", True, "1", "1",
     )
     latent_eid = c.submit_candidate_evidence(
-        cid, "SOURCE_REPOSITORY", "https://latent.example.com/e", "lh", "latent",
+        cid, "SOURCE_REPOSITORY", wb("https://latent.example.com/e"), EVIDENCE_DIGEST, "latent",
         1600000000, 1600001000,
     )
     c.freeze_latent_evidence(cid)
-    vm.mock_web(r"latent\.example\.com", {"body": "latent"})
+    vm.mock_web(r"latent\.example\.com", {"body": EVIDENCE_BODY})
     _mock_json(vm, LATENT_MATCH, _latent(latent_eid, latent_score))
     c.evaluate_latent_value(cid); vm.clear_mocks()
     cp = c.open_checkpoint(cid, 1600002000, 1600012000)
     impact_eid = c.submit_checkpoint_evidence(
-        cp, "PUBLIC_USAGE_RECORD", "https://impact.example.com/e", "ih", "impact",
+        cp, "PUBLIC_USAGE_RECORD", wb("https://impact.example.com/e"), EVIDENCE_DIGEST, "impact",
         1600002000, 1600002100,
     )
     c.freeze_checkpoint(cp)
-    vm.mock_web(r"impact\.example\.com", {"body": "impact"})
+    vm.mock_web(r"impact\.example\.com", {"body": EVIDENCE_BODY})
     _mock_json(vm, IMPACT_MATCH, _impact(impact_eid, tier, public, gaming))
     c.evaluate_public_value(cp); vm.clear_mocks()
     for i in range(3):
         c.register_contribution_node(
-            cid, ADDRS[i], "SOURCE_CODE", f"https://node{i+1}.example.com/a", f"n{i+1}",
+            cid, ADDRS[i], "SOURCE_CODE", wb(f"https://node{i+1}.example.com/a"), EVIDENCE_DIGEST,
             "ORIGINAL_AUTHOR" if i == 0 else "EXTENSION_AUTHOR", f"node {i+1}",
         )
     c.register_lineage_edge(cid, "2", "1", "EXTENDS", [latent_eid], 9000)
     c.register_lineage_edge(cid, "3", "2", "MAINTAINS", [impact_eid], 9000)
-    vm.mock_web(r"example\.com", {"body": "lineage"})
+    vm.mock_web(r"example\.com", {"body": EVIDENCE_BODY})
     _mock_json(vm, LINEAGE_MATCH, _lineage([latent_eid, impact_eid], confidence, allocation_bps))
     c.evaluate_lineage(cp); vm.clear_mocks()
     return cid, cp
@@ -102,14 +104,14 @@ def _next_checkpoint(c, vm, tier, public=7000, gaming=1000, confidence=8000):
     c.checkpoints["1"] = json.dumps(first)
     cp = c.open_checkpoint("1", 1600012000, 1600022000)
     eid = c.submit_checkpoint_evidence(
-        cp, "PUBLIC_USAGE_RECORD", "https://impact2.example.com/e", "ih2", "later impact",
+        cp, "PUBLIC_USAGE_RECORD", wb("https://impact2.example.com/e"), EVIDENCE_DIGEST, "later impact",
         1600012000, 1600012100,
     )
     c.freeze_checkpoint(cp)
-    vm.mock_web(r"impact2\.example\.com", {"body": "later impact"})
+    vm.mock_web(r"impact2\.example\.com", {"body": EVIDENCE_BODY})
     _mock_json(vm, IMPACT_MATCH, _impact(eid, tier, public, gaming))
     c.evaluate_public_value(cp); vm.clear_mocks()
-    vm.mock_web(r"example\.com", {"body": "lineage"})
+    vm.mock_web(r"example\.com", {"body": EVIDENCE_BODY})
     _mock_json(vm, LINEAGE_MATCH, _lineage(["1", eid], confidence))
     c.evaluate_lineage(cp); vm.clear_mocks()
     return cp

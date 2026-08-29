@@ -17,6 +17,8 @@ Run:  pytest tests/ -v
 import json
 import pytest
 
+from tests.direct._archive import wb, render_digest, EVIDENCE_BODY, EVIDENCE_DIGEST
+
 CONTRACT = "contracts/seedling.py"
 
 # Canonical, checksum-agnostic contributor addresses (0x + 40 hex). ADDR_MIXED
@@ -65,23 +67,31 @@ def _policies(c):
     )  # funding policy "1"
 
 
-def _reg(c, name="cand", url="https://example.com/artifact"):
+def _reg(c, name="cand", url=wb("https://example.com/artifact")):
     return c.register_candidate(
         name, "desc", "OPEN_SOURCE_LIBRARY",
         url, "2020-01-01", True, "1", "1",
     )
 
 
-def _evidence(c, cid, host="a.example.com", cat="SOURCE_REPOSITORY", h="e-h1"):
+def _evidence(c, cid, host="a.example.com", cat="SOURCE_REPOSITORY", h=EVIDENCE_DIGEST):
     return c.submit_candidate_evidence(
-        cid, cat, "https://" + host + "/x", h,
+        cid, cat, wb("https://" + host + "/x"), h,
         "evidence summary", 1600000000, 1600001000,
     )
 
 
+_NODE_SEQ = [0]
+
+
 def _node(c, cid="1", contributor=ADDR_1, atype="SOURCE_CODE",
-          url="https://repo.example.com/proj", ahash="hash-aaa",
+          url=None, ahash=EVIDENCE_DIGEST,
           role="ORIGINAL_AUTHOR", summary="original implementation"):
+    if url is None:
+        # Distinct artifacts now need distinct URLs: the hash is a digest of
+        # content, so two nodes over identical content at one URL ARE duplicates.
+        _NODE_SEQ[0] += 1
+        url = wb("https://repo.example.com/proj%d" % _NODE_SEQ[0])
     return c.register_contribution_node(
         cid, contributor, atype, url, ahash, role, summary,
     )
@@ -110,12 +120,12 @@ def _watching_candidate(c, vm):
     )
     c.create_funding_policy("fund", 100, 500, 1500, 4000, 9000, 2000, 3000, 6000)
     _reg(c)
-    _evidence(c, "1", host="a.example.com", cat="SOURCE_REPOSITORY", h="h1")
-    _evidence(c, "1", host="b.example.com", cat="PACKAGE_REGISTRY", h="h2")
+    _evidence(c, "1", host="a.example.com", cat="SOURCE_REPOSITORY")
+    _evidence(c, "1", host="b.example.com", cat="PACKAGE_REGISTRY")
     assert c.freeze_latent_evidence("1") == "LATENT"
     vm.mock_web(
         r"example\.com",
-        {"body": "Public README. Reused by several unrelated, independent projects."},
+        {"body": EVIDENCE_BODY},
     )
     verdict = {
         "latent_value_bps": 6200,
@@ -143,7 +153,7 @@ def test_register_contribution_node_happy_path(direct_deploy, direct_vm, direct_
 
     # submitter (msg.sender) is deliberately distinct from the CLAIMED contributor
     direct_vm.sender = direct_alice
-    nid = _node(c, contributor=ADDR_1)
+    nid = _node(c, contributor=ADDR_1, url=wb("https://repo.example.com/proj"))
     assert nid == "1"
 
     rec = json.loads(c.get_contribution_node("1"))
@@ -153,8 +163,8 @@ def test_register_contribution_node_happy_path(direct_deploy, direct_vm, direct_
     assert rec["node_id"] == "1"
     assert rec["candidate_id"] == "1"
     assert rec["artifact_type"] == "SOURCE_CODE"
-    assert rec["artifact_url"] == "https://repo.example.com/proj"
-    assert rec["artifact_hash"] == "hash-aaa"
+    assert rec["artifact_url"] == wb("https://repo.example.com/proj")
+    assert rec["artifact_hash"] == EVIDENCE_DIGEST
     assert rec["role"] == "ORIGINAL_AUTHOR"
     assert rec["summary"] == "original implementation"
     assert rec["status"] == "CLAIMED"
@@ -249,25 +259,25 @@ def test_node_duplicate_artifact_rejected_per_candidate(direct_deploy):
     c = direct_deploy(CONTRACT)
     _policies(c)
     _reg(c)                                          # candidate "1"
-    _reg(c, name="cand2", url="https://example.com/artifact2")  # candidate "2"
+    _reg(c, name="cand2", url=wb("https://example.com/artifact2"))  # candidate "2"
 
-    _node(c, cid="1", url="https://repo.example.com/x", ahash="H1")   # node "1"
+    _node(c, cid="1", url=wb("https://repo.example.com/x"), ahash=EVIDENCE_DIGEST)   # node "1"
     # exact same normalized url + hash on the SAME candidate -> duplicate
     with pytest.raises(Exception):
-        _node(c, cid="1", url="https://repo.example.com/x", ahash="H1")
-    # a different hash is allowed
-    _node(c, cid="1", url="https://repo.example.com/x", ahash="H2")   # node "2"
+        _node(c, cid="1", url=wb("https://repo.example.com/x"), ahash=EVIDENCE_DIGEST)
+    # a different artifact url is allowed
+    _node(c, cid="1", url=wb("https://repo.example.com/y"), ahash=EVIDENCE_DIGEST)   # node "2"
     # the SAME url + hash on a DIFFERENT candidate is allowed (dedup is per-candidate)
-    nid = _node(c, cid="2", url="https://repo.example.com/x", ahash="H1")
+    nid = _node(c, cid="2", url=wb("https://repo.example.com/x"), ahash=EVIDENCE_DIGEST)
     assert nid == "3"
 
 
 def test_node_append_only_history_and_no_overwrite(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
-    _node(c, url="https://repo.example.com/a", ahash="HA")   # node "1"
+    _node(c, url=wb("https://repo.example.com/a"), ahash=EVIDENCE_DIGEST)   # node "1"
     first = json.loads(c.get_contribution_node("1"))
-    _node(c, contributor=ADDR_2, url="https://repo.example.com/b", ahash="HB")  # node "2"
+    _node(c, contributor=ADDR_2, url=wb("https://repo.example.com/b"), ahash=EVIDENCE_DIGEST)  # node "2"
 
     # node "1" is untouched by the later registration (immutable, no overwrite)
     assert json.loads(c.get_contribution_node("1")) == first
@@ -276,15 +286,15 @@ def test_node_append_only_history_and_no_overwrite(direct_deploy):
     assert listing["total"] == 2
     assert [n["node_id"] for n in listing["items"]] == ["1", "2"]
     # monotonic ids, distinct records
-    assert listing["items"][0]["artifact_hash"] == "HA"
-    assert listing["items"][1]["artifact_hash"] == "HB"
+    assert listing["items"][0]["artifact_hash"] == EVIDENCE_DIGEST
+    assert listing["items"][1]["artifact_hash"] == EVIDENCE_DIGEST
 
 
 def test_node_pagination_bounds(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
     for i in range(3):
-        _node(c, url="https://repo.example.com/%d" % i, ahash="H%d" % i)
+        _node(c, url=wb("https://repo.example.com/%d") % i, ahash=EVIDENCE_DIGEST)
 
     full = json.loads(c.list_contribution_nodes("1", 0, 999))  # clamps, no error
     assert full["total"] == 3
@@ -307,8 +317,8 @@ def test_register_lineage_edge_happy_path(direct_deploy, direct_vm, direct_alice
     _reg(c)                                          # candidate "1"
     _evidence(c, "1", host="a.example.com", h="e1")  # evidence "1"
     _evidence(c, "1", host="b.example.com", h="e2")  # evidence "2"
-    _node(c, url="https://repo.example.com/a", ahash="na")             # node "1"
-    _node(c, contributor=ADDR_2, url="https://repo.example.com/b", ahash="nb")  # node "2"
+    _node(c, url=wb("https://repo.example.com/a"), ahash=EVIDENCE_DIGEST)             # node "1"
+    _node(c, contributor=ADDR_2, url=wb("https://repo.example.com/b"), ahash=EVIDENCE_DIGEST)  # node "2"
 
     direct_vm.sender = direct_alice
     eid = _edge(c, "1", "1", "2", "FORKED_FROM", ["1", "2"], 8000)
@@ -335,8 +345,8 @@ def test_register_lineage_edge_happy_path(direct_deploy, direct_vm, direct_alice
 def test_edge_empty_evidence_refs_allowed(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
-    _node(c, ahash="na")                             # node "1"
-    _node(c, contributor=ADDR_2, ahash="nb")         # node "2"
+    _node(c, ahash=EVIDENCE_DIGEST)                             # node "1"
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)         # node "2"
     eid = _edge(c, "1", "1", "2", "EXTENDS", [], 0)  # no supporting evidence; bps floor
     rec = json.loads(c.get_lineage_edge(eid))
     assert rec["evidence_refs"] == []
@@ -346,8 +356,8 @@ def test_edge_empty_evidence_refs_allowed(direct_deploy):
 def test_edge_bps_upper_bound_accepted(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
-    _node(c, ahash="na")                             # node "1"
-    _node(c, contributor=ADDR_2, ahash="nb")         # node "2"
+    _node(c, ahash=EVIDENCE_DIGEST)                             # node "1"
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)         # node "2"
     eid = _edge(c, "1", "1", "2", "DERIVED_FROM", [], 10000)
     assert json.loads(c.get_lineage_edge(eid))["claimed_strength_bps"] == 10000
 
@@ -355,8 +365,8 @@ def test_edge_bps_upper_bound_accepted(direct_deploy):
 def test_edge_rejects_invalid_relationship_type(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
-    _node(c, ahash="na")
-    _node(c, contributor=ADDR_2, ahash="nb")
+    _node(c, ahash=EVIDENCE_DIGEST)
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)
     with pytest.raises(Exception):
         _edge(c, "1", "1", "2", "IS_COOL", [], 5000)
 
@@ -364,7 +374,7 @@ def test_edge_rejects_invalid_relationship_type(direct_deploy):
 def test_edge_rejects_missing_from_node(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
-    _node(c, ahash="na")                             # node "1"
+    _node(c, ahash=EVIDENCE_DIGEST)                             # node "1"
     with pytest.raises(Exception):
         _edge(c, "1", "999", "1", "FORKED_FROM", [], 5000)
 
@@ -372,7 +382,7 @@ def test_edge_rejects_missing_from_node(direct_deploy):
 def test_edge_rejects_missing_to_node(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
-    _node(c, ahash="na")                             # node "1"
+    _node(c, ahash=EVIDENCE_DIGEST)                             # node "1"
     with pytest.raises(Exception):
         _edge(c, "1", "1", "999", "FORKED_FROM", [], 5000)
 
@@ -382,9 +392,9 @@ def test_edge_rejects_cross_candidate_node(direct_deploy):
     c = direct_deploy(CONTRACT)
     _policies(c)
     _reg(c)                                          # candidate "1"
-    _reg(c, name="cand2", url="https://example.com/artifact2")  # candidate "2"
-    _node(c, cid="1", ahash="na")                    # node "1" -> candidate "1"
-    _node(c, cid="2", contributor=ADDR_2, ahash="nb")  # node "2" -> candidate "2"
+    _reg(c, name="cand2", url=wb("https://example.com/artifact2"))  # candidate "2"
+    _node(c, cid="1", ahash=EVIDENCE_DIGEST)                    # node "1" -> candidate "1"
+    _node(c, cid="2", contributor=ADDR_2, ahash=EVIDENCE_DIGEST)  # node "2" -> candidate "2"
     with pytest.raises(Exception):
         _edge(c, "1", "1", "2", "FORKED_FROM", [], 5000)  # to-node is cross-candidate
 
@@ -392,7 +402,7 @@ def test_edge_rejects_cross_candidate_node(direct_deploy):
 def test_edge_rejects_self_loop(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
-    _node(c, ahash="na")                             # node "1"
+    _node(c, ahash=EVIDENCE_DIGEST)                             # node "1"
     with pytest.raises(Exception):
         _edge(c, "1", "1", "1", "FORKED_FROM", [], 5000)
 
@@ -400,8 +410,8 @@ def test_edge_rejects_self_loop(direct_deploy):
 def test_edge_rejects_duplicate_identical_edge(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
-    _node(c, ahash="na")                             # node "1"
-    _node(c, contributor=ADDR_2, ahash="nb")         # node "2"
+    _node(c, ahash=EVIDENCE_DIGEST)                             # node "1"
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)         # node "2"
     _edge(c, "1", "1", "2", "FORKED_FROM", [], 5000)  # edge "1"
     # exact same (candidate, from, to, relationship) -> duplicate rejected
     with pytest.raises(Exception):
@@ -415,8 +425,8 @@ def test_edge_reciprocal_claims_rejected_as_cycle(direct_deploy):
     # Stage 11 hardening keeps the claimed ancestry graph structurally acyclic.
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
-    _node(c, ahash="na")                             # node "1"
-    _node(c, contributor=ADDR_2, ahash="nb")         # node "2"
+    _node(c, ahash=EVIDENCE_DIGEST)                             # node "1"
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)         # node "2"
     e1 = _edge(c, "1", "1", "2", "FORKED_FROM", [], 6000)
     with pytest.raises(Exception):
         _edge(c, "1", "2", "1", "FORKED_FROM", [], 6000)
@@ -430,8 +440,8 @@ def test_edge_reciprocal_claims_rejected_as_cycle(direct_deploy):
 def test_edge_rejects_invalid_bps(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
-    _node(c, ahash="na")
-    _node(c, contributor=ADDR_2, ahash="nb")
+    _node(c, ahash=EVIDENCE_DIGEST)
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)
     with pytest.raises(Exception):
         _edge(c, "1", "1", "2", "FORKED_FROM", [], -1)        # negative
     with pytest.raises(Exception):
@@ -446,8 +456,8 @@ def test_edge_rejects_unknown_evidence_ref(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
     _evidence(c, "1", host="a.example.com", h="e1")  # evidence "1"
-    _node(c, ahash="na")
-    _node(c, contributor=ADDR_2, ahash="nb")
+    _node(c, ahash=EVIDENCE_DIGEST)
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)
     with pytest.raises(Exception):
         _edge(c, "1", "1", "2", "FORKED_FROM", ["1", "999"], 5000)
 
@@ -456,10 +466,10 @@ def test_edge_rejects_evidence_ref_from_another_candidate(direct_deploy):
     c = direct_deploy(CONTRACT)
     _policies(c)
     _reg(c)                                          # candidate "1"
-    _reg(c, name="cand2", url="https://example.com/artifact2")  # candidate "2"
+    _reg(c, name="cand2", url=wb("https://example.com/artifact2"))  # candidate "2"
     _evidence(c, "2", host="a.example.com", h="e1")  # evidence "1" -> candidate "2"
-    _node(c, cid="1", ahash="na")                    # node "1"
-    _node(c, cid="1", contributor=ADDR_2, ahash="nb")  # node "2"
+    _node(c, cid="1", ahash=EVIDENCE_DIGEST)                    # node "1"
+    _node(c, cid="1", contributor=ADDR_2, ahash=EVIDENCE_DIGEST)  # node "2"
     with pytest.raises(Exception):
         # evidence "1" belongs to candidate "2", not the edge's candidate "1"
         _edge(c, "1", "1", "2", "FORKED_FROM", ["1"], 5000)
@@ -469,8 +479,8 @@ def test_edge_rejects_duplicate_evidence_refs(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
     _evidence(c, "1", host="a.example.com", h="e1")  # evidence "1"
-    _node(c, ahash="na")
-    _node(c, contributor=ADDR_2, ahash="nb")
+    _node(c, ahash=EVIDENCE_DIGEST)
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)
     with pytest.raises(Exception):
         _edge(c, "1", "1", "2", "FORKED_FROM", ["1", "1"], 5000)
 
@@ -478,8 +488,8 @@ def test_edge_rejects_duplicate_evidence_refs(direct_deploy):
 def test_edge_pagination_bounds(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
-    _node(c, ahash="na")                             # node "1"
-    _node(c, contributor=ADDR_2, ahash="nb")         # node "2"
+    _node(c, ahash=EVIDENCE_DIGEST)                             # node "1"
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)         # node "2"
     _edge(c, "1", "1", "2", "FORKED_FROM", [], 1000)  # edge "1"
     _edge(c, "1", "1", "2", "EXTENDS", [], 2000)      # edge "2"
     _edge(c, "1", "1", "2", "DERIVED_FROM", [], 3000)  # edge "3"
@@ -524,12 +534,12 @@ def test_empty_listings_for_candidate_without_claims(direct_deploy):
 def test_pause_blocks_node_and_edge_registration(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
-    _node(c, ahash="na")                             # node "1"
-    _node(c, contributor=ADDR_2, ahash="nb")         # node "2"
+    _node(c, ahash=EVIDENCE_DIGEST)                             # node "1"
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)         # node "2"
 
     c.pause()
     with pytest.raises(Exception):
-        _node(c, url="https://repo.example.com/paused", ahash="hp")
+        _node(c, url=wb("https://repo.example.com/paused"), ahash=EVIDENCE_DIGEST)
     with pytest.raises(Exception):
         _edge(c, "1", "1", "2", "FORKED_FROM", [], 5000)
     # views still work while paused
@@ -547,8 +557,8 @@ def test_lifecycle_unchanged_by_claims_discovered(direct_deploy):
     c = direct_deploy(CONTRACT)
     _one_candidate(c)
     assert json.loads(c.get_candidate("1"))["status"] == "DISCOVERED"
-    _node(c, ahash="na")
-    _node(c, contributor=ADDR_2, ahash="nb")
+    _node(c, ahash=EVIDENCE_DIGEST)
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)
     _edge(c, "1", "1", "2", "FORKED_FROM", [], 7000)
     assert json.loads(c.get_candidate("1"))["status"] == "DISCOVERED"
 
@@ -559,8 +569,8 @@ def test_lifecycle_unchanged_by_claims_watching(direct_deploy, direct_vm):
     c = direct_deploy(CONTRACT)
     _watching_candidate(c, direct_vm)                # candidate "1" -> WATCHING, ev "1","2"
 
-    _node(c, ahash="na")                             # node "1"
-    _node(c, contributor=ADDR_2, ahash="nb")         # node "2"
+    _node(c, ahash=EVIDENCE_DIGEST)                             # node "1"
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)         # node "2"
     _edge(c, "1", "1", "2", "FORKED_FROM", ["1", "2"], 9000)
 
     cand = json.loads(c.get_candidate("1"))

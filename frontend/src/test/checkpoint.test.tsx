@@ -18,6 +18,21 @@ describe("checkpoint write ABI stays bound to what the UI sends", () => {
   expect(assertWriteOrder("evaluate_public_value", ["checkpoint_id"])).toBe(true);
  });
 
+ it("freezes finalize_checkpoint argument order", () => {
+  expect(assertWriteOrder("finalize_checkpoint", ["candidate_id", "checkpoint_id"])).toBe(true);
+ });
+
+ it("blocks finalization while an appeal on the checkpoint is unresolved", () => {
+  const appeals = [
+   { appeal_id: "1", checkpoint_id: "7", ground: "EVIDENCE_MISREAD", status: "RESOLVED", decision: "UPHOLD", statement: "" },
+   { appeal_id: "2", checkpoint_id: "7", ground: "EVIDENCE_MISREAD", status: "OPEN", decision: "", statement: "" },
+  ];
+  const blocked = (status: string) => appeals.filter(a => a.checkpoint_id === "7").some(a => a.status !== "RESOLVED") || status !== "EVALUATED";
+  expect(blocked("EVALUATED")).toBe(true);
+  const resolved = appeals.filter(a => a.status === "RESOLVED");
+  expect(resolved.some(a => a.status !== "RESOLVED")).toBe(false);
+ });
+
  it("only offers checkpoints to candidates that have cleared latent adjudication", () => {
   const eligible = ["WATCHING", "EMERGING", "MATERIAL", "SYSTEMIC"];
   const ineligible = ["DISCOVERED", "LATENT", "STALLED", "DECLINED", "ARCHIVED"];

@@ -8,6 +8,7 @@ from tests.direct.test_stage9 import (
     ADDRS, CONTRACT, IMPACT_MATCH, LATENT_MATCH, LINEAGE_MATCH,
     _impact, _latent, _lineage, _mock_json,
 )
+from tests.direct._archive import wb, render_digest, EVIDENCE_BODY, EVIDENCE_DIGEST
 
 
 APPEAL_MATCH = "SEEDLING appeal adjudicator"
@@ -23,24 +24,24 @@ def _bootstrap(c, vm):
     )
     cid = c.register_candidate(
         "Project A", "An obscure foundational primitive", "OPEN_SOURCE_LIBRARY",
-        "https://project-a.example.com/source", "2026-01-01", True, "1", "1",
+        wb("https://project-a.example.com/source"), "2026-01-01", True, "1", "1",
     )
     latent_eid = c.submit_candidate_evidence(
-        cid, "SOURCE_REPOSITORY", "https://early.example.com/project-a", "latent-hash",
+        cid, "SOURCE_REPOSITORY", wb("https://early.example.com/project-a"), EVIDENCE_DIGEST,
         "Early public source and downstream experimentation.", 1600000000, 1600001000,
     )
     c.freeze_latent_evidence(cid)
-    vm.mock_web(r"early\.example\.com", {"body": "Early independent reuse and unique design."})
+    vm.mock_web(r"early\.example\.com", {"body": EVIDENCE_BODY})
     _mock_json(vm, LATENT_MATCH, _latent(latent_eid, 8800))
     latent = json.loads(c.evaluate_latent_value(cid)); vm.clear_mocks()
     assert latent["latent_value_bps"] == 8800
 
     original = c.register_contribution_node(
-        cid, ADDRS[0], "SOURCE_CODE", "https://project-a.example.com/v1", "node-a",
+        cid, ADDRS[0], "SOURCE_CODE", wb("https://project-a.example.com/v1"), EVIDENCE_DIGEST,
         "ORIGINAL_AUTHOR", "Original 2026 foundational design.",
     )
     fork = c.register_contribution_node(
-        cid, ADDRS[1], "SOURCE_CODE", "https://fork-b.example.com/v1", "node-b",
+        cid, ADDRS[1], "SOURCE_CODE", wb("https://fork-b.example.com/v1"), EVIDENCE_DIGEST,
         "FORK_MAINTAINER", "2027 fork extending the original primitive.",
     )
     c.register_lineage_edge(cid, fork, original, "FORKED_FROM", [latent_eid], 9000)
@@ -50,14 +51,14 @@ def _bootstrap(c, vm):
 def _checkpoint(c, vm, start, end, tier, bps=(7000, 3000)):
     cp = c.open_checkpoint("1", start, end)
     eid = c.submit_checkpoint_evidence(
-        cp, "PUBLIC_USAGE_RECORD", f"https://impact{cp}.example.com/usage", f"impact-{cp}",
+        cp, "PUBLIC_USAGE_RECORD", wb(f"https://impact{cp}.example.com/usage"), EVIDENCE_DIGEST,
         f"Checkpoint {cp} downstream public usage.", start, start + 100,
     )
     c.freeze_checkpoint(cp)
-    vm.mock_web(r"example\.com", {"body": "Bounded public adoption evidence."})
+    vm.mock_web(r"example\.com", {"body": EVIDENCE_BODY})
     _mock_json(vm, IMPACT_MATCH, _impact(eid, tier=tier))
     c.evaluate_public_value(cp); vm.clear_mocks()
-    vm.mock_web(r"example\.com", {"body": "Historical source and derivative evidence."})
+    vm.mock_web(r"example\.com", {"body": EVIDENCE_BODY})
     _mock_json(vm, LINEAGE_MATCH, _lineage(["1", eid], bps=bps))
     lineage = json.loads(c.evaluate_lineage(cp)); vm.clear_mocks()
     funding = json.loads(c.calculate_funding(cp))
@@ -80,7 +81,7 @@ def _appeal_modify(c, vm, cp, eid):
         "evidence_refs": ["1", eid],
         "summary": "Material importance supported; original ancestry remains causal.",
     }
-    vm.mock_web(r"example\.com", {"body": "Frozen appeal evidence."})
+    vm.mock_web(r"example\.com", {"body": EVIDENCE_BODY})
     _mock_json(vm, APPEAL_MATCH, result)
     resolved = json.loads(c.evaluate_appeal(aid)); vm.clear_mocks()
     assert resolved["decision"] == "MODIFY"
@@ -151,19 +152,19 @@ def test_malformed_latent_adjudication_is_retryable_without_partial_state(direct
     c = direct_deploy(CONTRACT)
     c.create_observation_policy("obs", ["OPEN_SOURCE_LIBRARY"], 1, 1, "l", "i", "n", "g", "s", 86400)
     c.create_funding_policy("fund", 100, 500, 1500, 4000, 9000, 0, 10000, 0)
-    c.register_candidate("A", "d", "OPEN_SOURCE_LIBRARY", "https://a.example.com/x", "2026", True, "1", "1")
-    eid = c.submit_candidate_evidence("1", "SOURCE_REPOSITORY", "https://e.example.com/x", "h", "s", 1, 2)
+    c.register_candidate("A", "d", "OPEN_SOURCE_LIBRARY", wb("https://a.example.com/x"), "2026", True, "1", "1")
+    eid = c.submit_candidate_evidence("1", "SOURCE_REPOSITORY", wb("https://e.example.com/x"), EVIDENCE_DIGEST, "s", 1, 2)
     with pytest.raises(Exception):
-        c.submit_candidate_evidence("1", "SOURCE_REPOSITORY", "https://e.example.com/x", "h", "s", 1, 2)
+        c.submit_candidate_evidence("1", "SOURCE_REPOSITORY", wb("https://e.example.com/x"), EVIDENCE_DIGEST, "s", 1, 2)
     c.freeze_latent_evidence("1")
     with pytest.raises(Exception):
-        c.submit_candidate_evidence("1", "SOURCE_REPOSITORY", "https://new.example.com/x", "h2", "s", 1, 2)
-    direct_vm.mock_web(r"e\.example\.com", {"body": "evidence"})
+        c.submit_candidate_evidence("1", "SOURCE_REPOSITORY", wb("https://new.example.com/x"), EVIDENCE_DIGEST, "s", 1, 2)
+    direct_vm.mock_web(r"e\.example\.com", {"body": EVIDENCE_BODY})
     direct_vm.mock_llm(LATENT_MATCH, "not-json")
     with pytest.raises(Exception): c.evaluate_latent_value("1")
     assert json.loads(c.get_candidate("1"))["status"] == "LATENT"
     assert json.loads(c.get_protocol_info())["counts"]["latent_assessments"] == 0
-    direct_vm.clear_mocks(); direct_vm.mock_web(r"e\.example\.com", {"body": "evidence"})
+    direct_vm.clear_mocks(); direct_vm.mock_web(r"e\.example\.com", {"body": EVIDENCE_BODY})
     _mock_json(direct_vm, LATENT_MATCH, _latent(eid, 8000))
     assert json.loads(c.evaluate_latent_value("1"))["status"] == "FINALIZED"
 

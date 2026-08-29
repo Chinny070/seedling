@@ -24,6 +24,8 @@ Run:  pytest tests/ -v
 import json
 import pytest
 
+from tests.direct._archive import wb, render_digest, EVIDENCE_BODY, EVIDENCE_DIGEST
+
 CONTRACT = "contracts/seedling.py"
 
 # A stable, regex-metacharacter-free substring guaranteed to appear in the
@@ -48,14 +50,14 @@ def _frozen_candidate(c, min_cat=2, min_src=2):
     )  # funding policy id "1"
     c.register_candidate(
         "cand", "a small but foundational library", "OPEN_SOURCE_LIBRARY",
-        "https://example.com/artifact", "2020-01-01", True, "1", "1",
+        wb("https://example.com/artifact"), "2020-01-01", True, "1", "1",
     )  # candidate id "1"
     c.submit_candidate_evidence(
-        "1", "SOURCE_REPOSITORY", "https://a.example.com/repo", "h1",
+        "1", "SOURCE_REPOSITORY", wb("https://a.example.com/repo"), EVIDENCE_DIGEST,
         "primary source repository", 1600000000, 1600001000,
     )  # evidence id "1"
     c.submit_candidate_evidence(
-        "1", "PACKAGE_REGISTRY", "https://b.example.com/pkg", "h2",
+        "1", "PACKAGE_REGISTRY", wb("https://b.example.com/pkg"), EVIDENCE_DIGEST,
         "package registry listing", 1600000000, 1600001000,
     )  # evidence id "2"
     assert c.freeze_latent_evidence("1") == "LATENT"
@@ -92,7 +94,7 @@ def _mock_raw_llm(vm, raw):
 def _mock_web_ok(vm):
     vm.mock_web(
         r"example\.com",
-        {"body": "Public README. Reused by several unrelated, independent projects."},
+        {"body": EVIDENCE_BODY},
     )
 
 
@@ -127,10 +129,10 @@ def test_evaluate_requires_latent_state(direct_deploy, direct_vm):
     c.create_funding_policy("fund", 100, 500, 1500, 4000, 9000, 2000, 3000, 6000)
     c.register_candidate(
         "cand", "desc", "OPEN_SOURCE_LIBRARY",
-        "https://example.com/artifact", "2020-01-01", True, "1", "1",
+        wb("https://example.com/artifact"), "2020-01-01", True, "1", "1",
     )
     c.submit_candidate_evidence(
-        "1", "SOURCE_REPOSITORY", "https://a.example.com/repo", "h1",
+        "1", "SOURCE_REPOSITORY", wb("https://a.example.com/repo"), EVIDENCE_DIGEST,
         "repo", 1600000000, 1600001000,
     )
     _mock_verdict(direct_vm, _verdict(evidence_refs=[]))
@@ -147,8 +149,9 @@ def test_only_frozen_urls_are_fetched(direct_deploy, direct_vm):
     c = direct_deploy(CONTRACT)
     _frozen_candidate(c)
     # mock 0: a frozen host; mock 1: a decoy host NOT in the frozen evidence set.
-    direct_vm.mock_web(r"a\.example\.com", {"body": "frozen source A content"})
-    direct_vm.mock_web(r"decoy\.example\.com", {"body": "should never be fetched"})
+    direct_vm.mock_web(r"a\.example\.com", {"body": EVIDENCE_BODY})
+    direct_vm.mock_web(r"b\.example\.com", {"body": EVIDENCE_BODY})
+    direct_vm.mock_web(r"decoy\.example\.com", {"body": EVIDENCE_BODY})
     _mock_verdict(direct_vm, _verdict())
 
     c.evaluate_latent_value("1")
@@ -156,19 +159,22 @@ def test_only_frozen_urls_are_fetched(direct_deploy, direct_vm):
     # The frozen url's mock was hit; the decoy was never requested — the leader
     # only ever fetches urls drawn from the frozen evidence set.
     assert 0 in direct_vm._web_mocks_hit
-    assert 1 not in direct_vm._web_mocks_hit
+    assert 2 not in direct_vm._web_mocks_hit
 
 
-def test_survives_web_render_failure(direct_deploy, direct_vm):
-    # No web mock at all -> every render raises -> leader substitutes
-    # "[content unavailable]" per url and adjudication still completes. Graceful
-    # degradation: a retrieval failure does not corrupt or block the verdict.
+def test_web_render_failure_rejects_and_stays_retryable(direct_deploy, direct_vm):
+    # No web mock at all -> every render raises. Adjudication must NOT proceed:
+    # unreachable content cannot be checked against its submitted digest, and
+    # judging "[content unavailable]" would mean judging something nobody
+    # attested to. The candidate is left untouched and retryable.
     c = direct_deploy(CONTRACT)
     _frozen_candidate(c)
     _mock_verdict(direct_vm, _verdict())
 
-    rec = json.loads(c.evaluate_latent_value("1"))
-    assert rec["status"] == "FINALIZED"
+    with pytest.raises(Exception):
+        c.evaluate_latent_value("1")
+    assert json.loads(c.get_candidate("1"))["status"] == "LATENT"
+    assert json.loads(c.get_protocol_info())["counts"]["latent_assessments"] == 0
 
 
 # ==========================================================================
@@ -243,8 +249,8 @@ def test_evidence_immutable_through_evaluation(direct_deploy, direct_vm):
     c.evaluate_latent_value("1")
 
     # frozen evidence rows and the freeze snapshot are untouched by adjudication
-    assert json.loads(c.get_evidence("1"))["content_hash"] == "h1"
-    assert json.loads(c.get_evidence("2"))["content_hash"] == "h2"
+    assert json.loads(c.get_evidence("1"))["content_hash"] == EVIDENCE_DIGEST
+    assert json.loads(c.get_evidence("2"))["content_hash"] == EVIDENCE_DIGEST
     assert json.loads(c.get_evidence("1"))["status"] == "FROZEN"
     snap = json.loads(c.get_latent_evidence_set("1"))
     assert snap["frozen"] is True
@@ -270,14 +276,14 @@ def test_bps_boundary_values_accepted(direct_deploy, direct_vm):
     # a second candidate exercises the upper bound
     c.register_candidate(
         "cand2", "another foundational library", "OPEN_SOURCE_LIBRARY",
-        "https://example.com/artifact2", "2020-02-02", True, "1", "1",
+        wb("https://example.com/artifact2"), "2020-02-02", True, "1", "1",
     )
     c.submit_candidate_evidence(
-        "2", "SOURCE_REPOSITORY", "https://c.example.com/repo", "h3",
+        "2", "SOURCE_REPOSITORY", wb("https://c.example.com/repo"), EVIDENCE_DIGEST,
         "repo", 1600000000, 1600001000,
     )
     c.submit_candidate_evidence(
-        "2", "PACKAGE_REGISTRY", "https://d.example.com/pkg", "h4",
+        "2", "PACKAGE_REGISTRY", wb("https://d.example.com/pkg"), EVIDENCE_DIGEST,
         "pkg", 1600000000, 1600001000,
     )
     c.freeze_latent_evidence("2")
@@ -469,6 +475,7 @@ def test_retry_after_adjudication_failure(direct_deploy, direct_vm):
     # candidate retryable; mocking the LLM and retrying then succeeds.
     c = direct_deploy(CONTRACT)
     _frozen_candidate(c)
+    _mock_web_ok(direct_vm)
     # no LLM mock registered -> exec_prompt raises inside the leader
     with pytest.raises(Exception):
         c.evaluate_latent_value("1")

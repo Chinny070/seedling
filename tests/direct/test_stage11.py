@@ -7,6 +7,7 @@ import pytest
 from tests.direct.test_stage2 import _make_funding_policy, _make_obs_policy
 from tests.direct.test_stage5 import ADDR_1, ADDR_2, _edge, _node, _one_candidate
 from tests.direct.test_stage10 import CONTRACT, _mock_appeal, _open, _ready, _result
+from tests.direct._archive import wb, render_digest, EVIDENCE_BODY, EVIDENCE_DIGEST
 
 
 ADDR_3 = "0x" + "33" * 20
@@ -15,7 +16,7 @@ ADDR_3 = "0x" + "33" * 20
 def test_all_large_list_views_clamp_to_protocol_page_limit(direct_deploy):
     c = direct_deploy(CONTRACT); _one_candidate(c)
     for i in range(64):
-        _node(c, contributor=ADDR_1, url=f"https://n{i}.example.com/a", ahash=f"h{i}")
+        _node(c, contributor=ADDR_1, url=wb(f"https://n{i}.example.com/a"), ahash=EVIDENCE_DIGEST)
     page = json.loads(c.list_contribution_nodes("1", 0, 9999))
     assert page["total"] == 64 and len(page["items"]) == 50
     assert [x["node_id"] for x in page["items"][:2]] == ["1", "2"]
@@ -54,9 +55,9 @@ def test_funding_policy_family_is_bounded(direct_deploy):
 
 def test_lineage_rejects_longer_directed_cycle(direct_deploy):
     c = direct_deploy(CONTRACT); _one_candidate(c)
-    _node(c, contributor=ADDR_1, ahash="a")
-    _node(c, contributor=ADDR_2, ahash="b")
-    _node(c, contributor=ADDR_3, ahash="c")
+    _node(c, contributor=ADDR_1, ahash=EVIDENCE_DIGEST)
+    _node(c, contributor=ADDR_2, ahash=EVIDENCE_DIGEST)
+    _node(c, contributor=ADDR_3, ahash=EVIDENCE_DIGEST)
     _edge(c, "1", "1", "2", "DERIVED_FROM", [], 8000)
     _edge(c, "1", "2", "3", "EXTENDS", [], 7000)
     with pytest.raises(Exception): _edge(c, "1", "3", "1", "INCORPORATES", [], 6000)

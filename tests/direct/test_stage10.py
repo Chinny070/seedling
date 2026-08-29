@@ -5,6 +5,7 @@ import json
 import pytest
 
 from tests.direct.test_stage9 import CONTRACT, _prepare
+from tests.direct._archive import wb, render_digest, EVIDENCE_BODY, EVIDENCE_DIGEST
 
 
 APPEAL_MATCH = "SEEDLING appeal adjudicator"
@@ -32,7 +33,7 @@ def _result(decision="UPHOLD", tier="MATERIAL", confidence=8000,
 
 
 def _mock_appeal(vm, result):
-    vm.mock_web(r"example\.com", {"body": "public supporting material"})
+    vm.mock_web(r"example\.com", {"body": EVIDENCE_BODY})
     vm.mock_llm(APPEAL_MATCH, "```json\n" + json.dumps(result) + "\n```")
 
 
@@ -98,7 +99,7 @@ def test_malformed_appeal_has_no_partial_write_and_is_retryable(
     direct_deploy, direct_vm, bad,
 ):
     c = direct_deploy(CONTRACT); _ready(c, direct_vm); aid = _open(c)
-    direct_vm.mock_web(r"example\.com", {"body": "source"})
+    direct_vm.mock_web(r"example\.com", {"body": EVIDENCE_BODY})
     direct_vm.mock_llm(APPEAL_MATCH, bad)
     with pytest.raises(Exception): c.evaluate_appeal(aid)
     assert json.loads(c.get_appeal(aid))["status"] == "OPEN"
@@ -106,11 +107,25 @@ def test_malformed_appeal_has_no_partial_write_and_is_retryable(
     assert json.loads(c.evaluate_appeal(aid))["status"] == "RESOLVED"
 
 
-def test_uphold_cannot_mutate_original(direct_deploy, direct_vm):
+def test_uphold_preserves_original_even_when_model_mutates_it(direct_deploy, direct_vm):
+    # UPHOLD means nothing changes. Rather than trusting the model to copy the
+    # original tier/confidence/allocation back verbatim -- which proved
+    # unreliable against real validators -- the contract now takes those values
+    # from storage, so a mutated UPHOLD verdict cannot alter the effective
+    # result. The mutation is neutralised instead of rejected.
     c = direct_deploy(CONTRACT); _ready(c, direct_vm); aid = _open(c)
-    _mock_appeal(direct_vm, _result(tier="SYSTEMIC"))
-    with pytest.raises(Exception): c.evaluate_appeal(aid)
-    assert json.loads(c.get_appeal(aid))["status"] == "OPEN"
+    original = json.loads(c.get_lineage_verdict("1"))
+    _mock_appeal(direct_vm, _result(
+        tier="SYSTEMIC", confidence=10000, bps=(9000, 500, 500),
+    ))
+
+    resolved = json.loads(c.evaluate_appeal(aid))
+
+    assert resolved["decision"] == "UPHOLD"
+    effective = resolved["effective_result"]
+    assert effective["importance_tier"] == "MATERIAL"          # not SYSTEMIC
+    assert effective["attribution_confidence_bps"] == original["attribution_confidence_bps"]
+    assert effective["contributor_allocations"] == original["contributor_allocations"]
 
 
 def test_unresolved_appeal_blocks_finalization(direct_deploy, direct_vm):

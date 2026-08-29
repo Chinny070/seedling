@@ -16,6 +16,8 @@ Run:  pytest tests/ -v
 import json
 import pytest
 
+from tests.direct._archive import wb, render_digest, EVIDENCE_BODY, EVIDENCE_DIGEST
+
 CONTRACT = "contracts/seedling.py"
 
 
@@ -36,12 +38,12 @@ def _setup_candidate(c, min_cat=1, min_src=1, types=None):
     )  # funding policy id "1"
     return c.register_candidate(
         "cand", "a small but foundational library", "OPEN_SOURCE_LIBRARY",
-        "https://example.com/artifact", "2020-01-01", True, "1", "1",
+        wb("https://example.com/artifact"), "2020-01-01", True, "1", "1",
     )  # candidate id "1"
 
 
 def _submit(c, cid="1", stype="SOURCE_REPOSITORY",
-            url="https://example.com/e1", chash="hash1",
+            url=wb("https://example.com/e1"), chash=EVIDENCE_DIGEST,
             summary="a concise evidence summary",
             pstart=1600000000, pend=1600001000):
     return c.submit_candidate_evidence(
@@ -68,9 +70,9 @@ def test_submit_evidence_happy_path(direct_deploy, direct_owner):
     assert ev["candidate_id"] == "1"
     assert ev["checkpoint_id"] == ""          # canonical null for latent-stage
     assert ev["source_type"] == "SOURCE_REPOSITORY"
-    assert ev["source_url"] == "https://example.com/e1"
+    assert ev["source_url"] == wb("https://example.com/e1")
     assert ev["source_host"] == "example.com"
-    assert ev["content_hash"] == "hash1"
+    assert ev["content_hash"] == EVIDENCE_DIGEST
     assert ev["status"] == "SUBMITTED"         # derived: candidate not yet frozen
     assert ev["submitter"].lower().removeprefix("0x") == direct_owner.hex()
 
@@ -92,8 +94,8 @@ def test_each_valid_evidence_type(direct_deploy):
     for i, cat in enumerate(cats):
         eid = _submit(
             c, stype=cat,
-            url="https://ex%d.example.com/p%d" % (i, i),
-            chash="hash%d" % i,
+            url=wb("https://ex%d.example.com/p%d") % (i, i),
+            chash=EVIDENCE_DIGEST,
         )
         assert json.loads(c.get_evidence(eid))["source_type"] == cat
 
@@ -128,10 +130,10 @@ def test_normalized_source_host(direct_deploy):
     _setup_candidate(c)
     # userinfo + uppercase + explicit port must all normalize away, while the
     # raw source_url is preserved exactly as submitted.
-    eid = _submit(c, url="https://User@EXAMPLE.com:8443/Path")
+    eid = _submit(c, url=wb("https://User@EXAMPLE.com:8443/Path"))
     ev = json.loads(c.get_evidence(eid))
     assert ev["source_host"] == "example.com"
-    assert ev["source_url"] == "https://User@EXAMPLE.com:8443/Path"
+    assert ev["source_url"] == wb("https://User@EXAMPLE.com:8443/Path")
 
 
 def test_missing_content_hash(direct_deploy):
@@ -142,7 +144,7 @@ def test_missing_content_hash(direct_deploy):
     with pytest.raises(Exception):
         _submit(c, chash="has whitespace")           # must be whitespace-free
     with pytest.raises(Exception):
-        _submit(c, chash="x" * 129)                  # exceeds MAX_CONTENT_HASH_LEN (128)
+        _submit(c, chash="h" * 129)                  # exceeds MAX_CONTENT_HASH_LEN (128)
 
 
 def test_oversized_summary(direct_deploy):
@@ -169,15 +171,15 @@ def test_duplicate_evidence(direct_deploy):
     c = direct_deploy(CONTRACT)
     _setup_candidate(c)
 
-    _submit(c, url="https://example.com/e1", chash="hashX")
+    _submit(c, url=wb("https://example.com/e1"), chash=EVIDENCE_DIGEST)
     # exact same normalized url + content_hash -> rejected
     with pytest.raises(Exception):
-        _submit(c, url="https://example.com/e1", chash="hashX")
-    # same url, different content_hash -> distinct tuple -> allowed
-    assert _submit(c, url="https://example.com/e1", chash="hashY") == "2"
+        _submit(c, url=wb("https://example.com/e1"), chash=EVIDENCE_DIGEST)
+    # a different source url is a distinct tuple -> allowed
+    assert _submit(c, url=wb("https://example.com/e2"), chash=EVIDENCE_DIGEST) == "2"
     # case + trailing-slash variant normalizes to the first -> duplicate
     with pytest.raises(Exception):
-        _submit(c, url="https://EXAMPLE.com/e1/", chash="hashX")
+        _submit(c, url=wb("https://EXAMPLE.com/e1/"), chash=EVIDENCE_DIGEST)
 
 
 def test_candidate_evidence_cap(direct_deploy):
@@ -185,10 +187,10 @@ def test_candidate_evidence_cap(direct_deploy):
     _setup_candidate(c)
     # exactly MAX_EVIDENCE_PER_CANDIDATE (64) succeed; the 65th is rejected.
     for i in range(64):
-        _submit(c, url="https://cap%d.example.com/p" % i, chash="h%d" % i)
+        _submit(c, url=wb("https://cap%d.example.com/p") % i, chash=EVIDENCE_DIGEST)
     assert json.loads(c.list_candidate_evidence("1", 0, 50))["total"] == 64
     with pytest.raises(Exception):
-        _submit(c, url="https://cap64.example.com/p", chash="h64")
+        _submit(c, url=wb("https://cap64.example.com/p"), chash=EVIDENCE_DIGEST)
 
 
 def test_nonexistent_candidate(direct_deploy):
@@ -227,8 +229,8 @@ def test_freeze_missing_required_category(direct_deploy):
     c = direct_deploy(CONTRACT)
     _setup_candidate(c, min_cat=2, min_src=1)
     # two distinct hosts (satisfies min_src) but only ONE category (< min_cat).
-    _submit(c, stype="SOURCE_REPOSITORY", url="https://a.example.com/x", chash="h1")
-    _submit(c, stype="SOURCE_REPOSITORY", url="https://b.example.com/y", chash="h2")
+    _submit(c, stype="SOURCE_REPOSITORY", url=wb("https://a.example.com/x"), chash=EVIDENCE_DIGEST)
+    _submit(c, stype="SOURCE_REPOSITORY", url=wb("https://b.example.com/y"), chash=EVIDENCE_DIGEST)
 
     set_view = json.loads(c.get_latent_evidence_set("1"))
     assert set_view["distinct_category_count"] == 1
@@ -241,8 +243,8 @@ def test_freeze_insufficient_hosts(direct_deploy):
     c = direct_deploy(CONTRACT)
     _setup_candidate(c, min_cat=1, min_src=3)
     # two distinct categories (satisfies min_cat) but only TWO hosts (< min_src).
-    _submit(c, stype="SOURCE_REPOSITORY", url="https://a.example.com/x", chash="h1")
-    _submit(c, stype="PACKAGE_REGISTRY", url="https://b.example.com/y", chash="h2")
+    _submit(c, stype="SOURCE_REPOSITORY", url=wb("https://a.example.com/x"), chash=EVIDENCE_DIGEST)
+    _submit(c, stype="PACKAGE_REGISTRY", url=wb("https://b.example.com/y"), chash=EVIDENCE_DIGEST)
 
     assert json.loads(c.get_latent_evidence_set("1"))["distinct_host_count"] == 2
     with pytest.raises(Exception):
@@ -254,8 +256,8 @@ def test_same_host_different_port_not_independent(direct_deploy):
     # independent source — a port cannot fake source independence.
     c = direct_deploy(CONTRACT)
     _setup_candidate(c, min_cat=1, min_src=2)
-    _submit(c, url="https://example.com:80/a", chash="h1")
-    _submit(c, url="https://example.com:8080/b", chash="h2")
+    _submit(c, url=wb("https://example.com:80/a"), chash=EVIDENCE_DIGEST)
+    _submit(c, url=wb("https://example.com:8080/b"), chash=EVIDENCE_DIGEST)
 
     set_view = json.loads(c.get_latent_evidence_set("1"))
     assert set_view["distinct_host_count"] == 1
@@ -277,8 +279,8 @@ def test_latent_set_live_progress_before_freeze(direct_deploy):
     assert before["candidate_status"] == "DISCOVERED"
     assert before["requirements_met"] is False
 
-    _submit(c, stype="SOURCE_REPOSITORY", url="https://a.example.com/x", chash="h1")
-    _submit(c, stype="PACKAGE_REGISTRY", url="https://b.example.com/y", chash="h2")
+    _submit(c, stype="SOURCE_REPOSITORY", url=wb("https://a.example.com/x"), chash=EVIDENCE_DIGEST)
+    _submit(c, stype="PACKAGE_REGISTRY", url=wb("https://b.example.com/y"), chash=EVIDENCE_DIGEST)
 
     after = json.loads(c.get_latent_evidence_set("1"))
     assert after["frozen"] is False
@@ -290,8 +292,8 @@ def test_latent_set_live_progress_before_freeze(direct_deploy):
 def test_successful_freeze_and_transition(direct_deploy):
     c = direct_deploy(CONTRACT)
     _setup_candidate(c, min_cat=2, min_src=2)
-    _submit(c, stype="SOURCE_REPOSITORY", url="https://a.example.com/x", chash="h1")
-    _submit(c, stype="PACKAGE_REGISTRY", url="https://b.example.com/y", chash="h2")
+    _submit(c, stype="SOURCE_REPOSITORY", url=wb("https://a.example.com/x"), chash=EVIDENCE_DIGEST)
+    _submit(c, stype="PACKAGE_REGISTRY", url=wb("https://b.example.com/y"), chash=EVIDENCE_DIGEST)
 
     assert c.freeze_latent_evidence("1") == "LATENT"
 
@@ -314,8 +316,8 @@ def test_successful_freeze_and_transition(direct_deploy):
 def test_post_freeze_invariants(direct_deploy):
     c = direct_deploy(CONTRACT)
     _setup_candidate(c, min_cat=2, min_src=2)
-    e1 = _submit(c, stype="SOURCE_REPOSITORY", url="https://a.example.com/x", chash="h1")
-    e2 = _submit(c, stype="PACKAGE_REGISTRY", url="https://b.example.com/y", chash="h2")
+    e1 = _submit(c, stype="SOURCE_REPOSITORY", url=wb("https://a.example.com/x"), chash=EVIDENCE_DIGEST)
+    e2 = _submit(c, stype="PACKAGE_REGISTRY", url=wb("https://b.example.com/y"), chash=EVIDENCE_DIGEST)
     c.freeze_latent_evidence("1")
 
     # evidence status is derived as FROZEN once the owning set is frozen
@@ -329,15 +331,15 @@ def test_post_freeze_invariants(direct_deploy):
 
     # no submission after freeze
     with pytest.raises(Exception):
-        _submit(c, url="https://c.example.com/z", chash="h3")
+        _submit(c, url=wb("https://c.example.com/z"), chash=EVIDENCE_DIGEST)
 
     # double freeze rejected
     with pytest.raises(Exception):
         c.freeze_latent_evidence("1")
 
     # the frozen records are all still present and unchanged
-    assert json.loads(c.get_evidence(e1))["content_hash"] == "h1"
-    assert json.loads(c.get_evidence(e2))["content_hash"] == "h2"
+    assert json.loads(c.get_evidence(e1))["content_hash"] == EVIDENCE_DIGEST
+    assert json.loads(c.get_evidence(e2))["content_hash"] == EVIDENCE_DIGEST
 
 
 # ==========================================================================
@@ -350,7 +352,7 @@ def test_pause_blocks_evidence_and_freeze(direct_deploy):
 
     c.pause()
     with pytest.raises(Exception):
-        _submit(c, url="https://other.example.com/z", chash="hz")
+        _submit(c, url=wb("https://other.example.com/z"), chash=EVIDENCE_DIGEST)
     with pytest.raises(Exception):
         c.freeze_latent_evidence("1")
 

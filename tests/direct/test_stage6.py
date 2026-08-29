@@ -9,6 +9,8 @@ import json
 import pytest
 
 
+from tests.direct._archive import wb, render_digest, EVIDENCE_BODY, EVIDENCE_DIGEST
+
 CONTRACT = "contracts/seedling.py"
 LLM_MATCH = "adjudicator for SEEDLING"
 CP_START = 1600002000
@@ -45,9 +47,9 @@ def _watching_candidate(
     c,
     vm,
     name="cand",
-    artifact_url="https://artifact.example.com/cand",
-    evidence_url="https://latent.example.com/cand",
-    evidence_hash="latent-hash",
+    artifact_url=wb("https://artifact.example.com/cand"),
+    evidence_url=wb("https://latent.example.com/cand"),
+    evidence_hash=EVIDENCE_DIGEST,
     min_cat=1,
     min_src=1,
 ):
@@ -59,15 +61,16 @@ def _watching_candidate(
     evidence_ids = []
     required = max(min_cat, min_src)
     for i in range(required):
-        url = evidence_url if i == 0 else f"https://latent{i}.{name}.example.com/e"
-        content_hash = evidence_hash if i == 0 else f"{evidence_hash}-{i}"
+        url = evidence_url if i == 0 else wb(f"https://latent{i}.{name}.example.com/e")
+        # every mocked source renders the same body, so one digest binds them all
+        content_hash = evidence_hash
         evidence_ids.append(c.submit_candidate_evidence(
             cid, categories[i % len(categories)], url, content_hash,
             "latent source evidence", 1600000000, 1600001000,
         ))
     assert c.freeze_latent_evidence(cid) == "LATENT"
     vm.clear_mocks()
-    vm.mock_web(r"example\.com", {"body": "Public source material."})
+    vm.mock_web(r"example\.com", {"body": EVIDENCE_BODY})
     vm.mock_llm(
         LLM_MATCH,
         "```json\n" + json.dumps(_verdict(evidence_ids)) + "\n```",
@@ -90,8 +93,8 @@ def _submit(
     c,
     checkpoint_id="1",
     source_type="SOURCE_REPOSITORY",
-    url="https://impact.example.com/one",
-    content_hash="impact-hash-1",
+    url=wb("https://impact.example.com/one"),
+    content_hash=EVIDENCE_DIGEST,
     summary="checkpoint evidence",
     start=CP_START,
     end=CP_START + 100,
@@ -122,13 +125,13 @@ def test_open_requires_existing_and_watching_candidate(direct_deploy, direct_vm)
         _open(c, "999")
     _policies(c)
     cid = c.register_candidate(
-        "new", "desc", "OPEN_SOURCE_LIBRARY", "https://example.com/new",
+        "new", "desc", "OPEN_SOURCE_LIBRARY", wb("https://example.com/new"),
         "2020-01-01", True, "1", "1",
     )
     with pytest.raises(Exception):
         _open(c, cid)
     c.submit_candidate_evidence(
-        cid, "SOURCE_REPOSITORY", "https://example.com/e", "h", "summary",
+        cid, "SOURCE_REPOSITORY", wb("https://example.com/e"), EVIDENCE_DIGEST, "summary",
         1600000000, 1600001000,
     )
     c.freeze_latent_evidence(cid)
@@ -163,8 +166,8 @@ def test_checkpoint_ids_are_global_monotonic(direct_deploy, direct_vm):
     _policies(c)
     cid1, _ = _watching_candidate(c, direct_vm)
     cid2, _ = _watching_candidate(
-        c, direct_vm, "cand2", "https://artifact.example.com/two",
-        "https://latent.example.com/two", "latent-two",
+        c, direct_vm, "cand2", wb("https://artifact.example.com/two"),
+        wb("https://latent.example.com/two"), EVIDENCE_DIGEST,
     )
     assert c.open_checkpoint(cid1, CP_START, CP_END) == "1"
     assert c.open_checkpoint(cid2, CP_START, CP_END) == "2"
@@ -201,7 +204,7 @@ def test_submit_requires_existing_open_checkpoint(direct_deploy, direct_vm):
     _submit(c)
     c.freeze_checkpoint("1")
     with pytest.raises(Exception):
-        _submit(c, "1", content_hash="later")
+        _submit(c, "1", content_hash=EVIDENCE_DIGEST)
 
 
 def test_submit_rejects_invalid_type_and_url(direct_deploy, direct_vm):
@@ -219,8 +222,8 @@ def test_hostname_normalization_and_ports_collapse(direct_deploy, direct_vm):
     c = direct_deploy(CONTRACT)
     _setup(c, direct_vm, min_cat=1, min_src=2)
     _open(c)
-    e1 = _submit(c, url="https://User@EXAMPLE.com:80/a", content_hash="h1")
-    e2 = _submit(c, url="https://example.com:8080/b", content_hash="h2")
+    e1 = _submit(c, url=wb("https://User@EXAMPLE.com:80/a"), content_hash=EVIDENCE_DIGEST)
+    e2 = _submit(c, url=wb("https://example.com:8080/b"), content_hash=EVIDENCE_DIGEST)
     assert json.loads(c.get_evidence(e1))["source_host"] == "example.com"
     assert json.loads(c.get_evidence(e2))["source_host"] == "example.com"
     live = json.loads(c.get_checkpoint_evidence_set("1"))
@@ -246,17 +249,17 @@ def test_checkpoint_duplicate_is_scoped_and_latent_source_reuse_allowed(
     c = direct_deploy(CONTRACT)
     _policies(c)
     _, _ = _watching_candidate(
-        c, direct_vm, evidence_url="https://same.example.com/source",
-        evidence_hash="same-hash",
+        c, direct_vm, evidence_url=wb("https://same.example.com/source"),
+        evidence_hash=EVIDENCE_DIGEST,
     )
     _open(c)
     assert _submit(
-        c, url="https://same.example.com/source", content_hash="same-hash",
+        c, url=wb("https://same.example.com/source"), content_hash=EVIDENCE_DIGEST,
     ) == "2"
     with pytest.raises(Exception):
-        _submit(c, url="https://same.example.com/source", content_hash="same-hash")
+        _submit(c, url=wb("https://same.example.com/source"), content_hash=EVIDENCE_DIGEST)
     with pytest.raises(Exception):
-        _submit(c, url="https://SAME.example.com/source/", content_hash="same-hash")
+        _submit(c, url=wb("https://SAME.example.com/source/"), content_hash=EVIDENCE_DIGEST)
 
 
 @pytest.mark.parametrize("start,end", [
@@ -281,11 +284,11 @@ def test_checkpoint_evidence_cap(direct_deploy, direct_vm):
     for i in range(64):
         _submit(
             c,
-            url=f"https://h{i}.example.com/e",
-            content_hash=f"hash-{i}",
+            url=wb(f"https://h{i}.example.com/e"),
+            content_hash=EVIDENCE_DIGEST,
         )
     with pytest.raises(Exception):
-        _submit(c, url="https://overflow.example.com/e", content_hash="overflow")
+        _submit(c, url=wb("https://overflow.example.com/e"), content_hash=EVIDENCE_DIGEST)
     assert json.loads(c.list_checkpoint_evidence("1", 0, 100))["total"] == 64
 
 
@@ -301,8 +304,8 @@ def test_freeze_enforces_categories(direct_deploy, direct_vm):
     c = direct_deploy(CONTRACT)
     _setup(c, direct_vm, min_cat=2, min_src=1)
     _open(c)
-    _submit(c, url="https://a.example.com/a", content_hash="a")
-    _submit(c, url="https://b.example.com/b", content_hash="b")
+    _submit(c, url=wb("https://a.example.com/a"), content_hash=EVIDENCE_DIGEST)
+    _submit(c, url=wb("https://b.example.com/b"), content_hash=EVIDENCE_DIGEST)
     with pytest.raises(Exception):
         c.freeze_checkpoint("1")
 
@@ -311,8 +314,8 @@ def test_freeze_enforces_distinct_hosts(direct_deploy, direct_vm):
     c = direct_deploy(CONTRACT)
     _setup(c, direct_vm, min_cat=1, min_src=2)
     _open(c)
-    _submit(c, url="https://same.example.com/a", content_hash="a")
-    _submit(c, url="https://same.example.com/b", content_hash="b")
+    _submit(c, url=wb("https://same.example.com/a"), content_hash=EVIDENCE_DIGEST)
+    _submit(c, url=wb("https://same.example.com/b"), content_hash=EVIDENCE_DIGEST)
     with pytest.raises(Exception):
         c.freeze_checkpoint("1")
 
@@ -321,10 +324,10 @@ def test_successful_freeze_snapshot_and_lifecycle(direct_deploy, direct_vm):
     c = direct_deploy(CONTRACT)
     _setup(c, direct_vm, min_cat=2, min_src=2)
     _open(c)
-    e1 = _submit(c, url="https://a.example.com/a", content_hash="a")
+    e1 = _submit(c, url=wb("https://a.example.com/a"), content_hash=EVIDENCE_DIGEST)
     e2 = _submit(
-        c, source_type="PACKAGE_REGISTRY", url="https://b.example.com/b",
-        content_hash="b",
+        c, source_type="PACKAGE_REGISTRY", url=wb("https://b.example.com/b"),
+        content_hash=EVIDENCE_DIGEST,
     )
     assert c.freeze_checkpoint("1") == "EVIDENCE_FROZEN"
     cp = json.loads(c.get_checkpoint("1"))
@@ -352,7 +355,7 @@ def test_frozen_snapshot_is_immutable_and_double_freeze_rejected(direct_deploy, 
     c.freeze_checkpoint("1")
     snap1 = json.loads(c.get_checkpoint_evidence_set("1"))
     with pytest.raises(Exception):
-        _submit(c, content_hash="new")
+        _submit(c, content_hash=EVIDENCE_DIGEST)
     with pytest.raises(Exception):
         c.freeze_checkpoint("1")
     snap2 = json.loads(c.get_checkpoint_evidence_set("1"))
@@ -376,7 +379,7 @@ def test_checkpoint_pagination_is_bounded(direct_deploy, direct_vm):
     _setup(c, direct_vm)
     _open(c)
     for i in range(55):
-        _submit(c, url=f"https://p{i}.example.com/e", content_hash=f"p-{i}")
+        _submit(c, url=wb(f"https://p{i}.example.com/e"), content_hash=EVIDENCE_DIGEST)
     page = json.loads(c.list_checkpoint_evidence("1", -5, 999))
     assert page["total"] == 55
     assert len(page["items"]) == 50
