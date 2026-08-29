@@ -1,18 +1,23 @@
 # Canonical StudioNet deployment
 
-## Pending redeployment (evidence integrity + finalization surface)
+## Current canonical deployment
 
-The contract below is **not yet deployed**. It supersedes the canonical
-deployment for the first consensus-affecting reason since the prompt fixes:
-evidence integrity is now enforced on both halves of its lifecycle.
-
+- Network: GenLayer StudioNet
+- Chain ID: `61999`
+- RPC: `https://studio.genlayer.com/api`
+- Contract: `0xF3626A32B588B9F5Fc68C76ff4abc55f966E6f31`
+- Owner: `0xaffE15eEc45b68835cc9E5B4Ab85dD5deaE8e70b`
+- Deployment method: manually deployed by the owner in GenLayer Studio
+- Constructor: `Seedling()` with zero arguments
+- Deployed: 2026-08-29
 - Source SHA-256: `43137aa662751edab6b1f4393521daced1c65b8ec5cd8cf418c088152fafbb7e`
   (hashed with LF line endings, as the file is stored in git)
 - Git blob hash: `75aebb16db1797eb7dc78d8b9fc36c9a4f9a868a`
+- Source commit: `cf1e8c2`
 - Public ABI: unchanged — 56 methods (33 views, 23 writes), zero-argument
   `Seedling()` constructor
 
-What changed, and why it cannot be verified on the existing deployment:
+What changed, and why it required a new deployment:
 
 1. **Submission time.** Evidence, checkpoint evidence, and contribution
    artifacts must now be raw Wayback snapshot URLs (`/web/<ts>id_/<origin>`),
@@ -26,24 +31,26 @@ What changed, and why it cannot be verified on the existing deployment:
    Previously a failed render silently degraded to `[content unavailable]`,
    which meant judging content nobody had attested to.
 
-Both rules are consensus-affecting and reject data the existing deployment
-accepts, so the existing deployment's records cannot be migrated. The new
+Both rules are consensus-affecting and reject data the previous deployment
+accepts, so the previous deployment's records could not be migrated. This
 deployment starts empty and the lifecycle must be re-exercised end to end.
+
+Verified live after deployment via the frontend's installed `genlayer-js`
+client: `name: SEEDLING`, `owner` as above, `paused: false`, protocol/spec
+version 1, all eleven counters at zero, and empty `list_candidates`,
+`list_observation_policies`, and `list_funding_policies` pages. The deployment
+transaction hash was not supplied and is therefore not asserted here.
 
 The frontend also now exposes `finalize_checkpoint`, which existed on-chain
 from the start but had no UI surface — without it the repeated funding
 lifecycle could not be completed from the product. That change is frontend-only
 and needs no redeployment on its own.
 
-### Deployment procedure
+## Superseded: prompt-fix deployment
 
-Identical to the manual procedure at the end of this document: paste the whole
-of `contracts/seedling.py` into GenLayer Studio on StudioNet (chain `61999`),
-class `Seedling`, no constructor arguments, deploy once from the owner wallet,
-then record the address and transaction hash here and set
-`VITE_SEEDLING_CONTRACT_ADDRESS` to the new address.
-
-## Current canonical deployment
+Superseded 2026-08-29 by the evidence-integrity deployment above. Holds
+whatever lifecycle records were created against it; none of them satisfy the
+archive-source or digest-binding rules, which is why they were not migrated.
 
 - Network: GenLayer StudioNet
 - Chain ID: `61999`
@@ -240,7 +247,11 @@ other production records merely to populate read results.
 
 The single frontend configuration path remains
 `VITE_SEEDLING_CONTRACT_ADDRESS`. `frontend/.env.example` contains the canonical
-owner-controlled address.
+owner-controlled address, now
+`0xF3626A32B588B9F5Fc68C76ff4abc55f966E6f31`. The Vercel project environment
+variable must be updated to match and the project rebuilt — the Vite variable is
+inlined at build time, so saving it without a rebuild leaves the old address
+live.
 StudioNet configuration comes from `genlayer-js/chains` and targets chain 61999.
 There is no backend, database, indexer, private key, or fake-data fallback.
 
