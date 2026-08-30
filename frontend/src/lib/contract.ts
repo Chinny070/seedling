@@ -132,8 +132,11 @@ export async function writeContract(
  * of breaking submission.
  */
 export function decodeWriteResult(receipt: unknown): unknown {
-  const encoded = (receipt as { consensus_data?: { leader_receipt?: { result?: string }[] } })
+  // StudioNet returns `result` as { raw: "<base64>" }; older shapes put the
+  // base64 directly on `result`. Accept both rather than pinning one.
+  const result = (receipt as { consensus_data?: { leader_receipt?: { result?: string | { raw?: string } }[] } })
     ?.consensus_data?.leader_receipt?.[0]?.result;
+  const encoded = typeof result === "string" ? result : result?.raw;
   if (typeof encoded !== "string" || !encoded) return undefined;
   let bytes: Uint8Array;
   try { bytes = Uint8Array.from(atob(encoded), ch => ch.charCodeAt(0)); } catch { return undefined; }
