@@ -51,6 +51,8 @@ function ArchivedSourceFields({submit,locked}:{submit:(m:WriteMethod,a:ContractA
  return <><Field name="url" label="Archived snapshot URL" type="url" required placeholder="https://web.archive.org/web/20240101000000id_/https://example.org/page" value={url} onChange={e=>setUrl(e.target.value)}/>
   <p className="hint">Not archived yet? Save the page at <a href="https://web.archive.org/save" target="_blank" rel="noreferrer">web.archive.org/save</a> first, then paste the snapshot address it produces. An ordinary link to the live page is rejected: only an archived snapshot can still be shown to have said what it said when the evidence was judged.</p>
   <div className="latent-actions"><button type="button" className="button" disabled={locked||busy||!url} onClick={()=>void preview()}>{busy?"Asking the contract...":"Preview digest"}</button></div>
+  {locked&&<p className="hint">Connect a StudioNet wallet to preview the digest. Previewing asks the validators to render the page, so it is a transaction like any other.</p>}
+  {!locked&&!url&&<p className="hint">Paste the archived snapshot URL above to enable the digest preview.</p>}
   <Field name="hash" label="Rendered content digest" required placeholder="sha256:..." value={digest} onChange={e=>setDigest(e.target.value)}/>
   {note&&<p className="hint">{note}</p>}
   {error&&<p className="form-error" role="alert">{error}</p>}
