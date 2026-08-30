@@ -124,19 +124,34 @@ export async function writeContract(
 
 /** Pull a write method's return value out of its finalized receipt.
  *
- * Consensus puts the leader's GenVM return value in
- * consensus_data.leader_receipt[0].result, base64 of calldata-encoded bytes.
+ * GenLayer reports that value in more than one shape depending on which client
+ * call produced the receipt, so all of them are handled rather than pinning the
+ * one that happened to be observed:
+ *   result.payload.readable  - what waitForTransactionReceipt returns, a
+ *                              JSON-encoded string wrapping the JSON
+ *   result.raw / result      - base64 of calldata-encoded bytes, as the
+ *                              explorer query returns
  * Only methods that return something meaningful need this; every other write
- * ignores the receipt entirely. Returns undefined rather than throwing when the
- * shape is unfamiliar, so a decoding surprise degrades to "no preview" instead
- * of breaking submission.
+ * ignores the receipt. Returns undefined rather than throwing on an unfamiliar
+ * shape, so a decoding surprise degrades to "no preview" instead of breaking
+ * submission.
  */
 export function decodeWriteResult(receipt: unknown): unknown {
-  // StudioNet returns `result` as { raw: "<base64>" }; older shapes put the
-  // base64 directly on `result`. Accept both rather than pinning one.
-  const result = (receipt as { consensus_data?: { leader_receipt?: { result?: string | { raw?: string } }[] } })
+  type ResultShape = string | { raw?: string; payload?: { readable?: string } };
+  const result = (receipt as { consensus_data?: { leader_receipt?: { result?: ResultShape }[] } })
     ?.consensus_data?.leader_receipt?.[0]?.result;
-  const encoded = typeof result === "string" ? result : result?.raw;
+  if (!result) return undefined;
+
+  if (typeof result === "object" && typeof result.payload?.readable === "string") {
+    // Peel JSON encoding layers until a non-string falls out or nothing parses.
+    let value: unknown = result.payload.readable;
+    for (let depth = 0; depth < 3 && typeof value === "string"; depth++) {
+      try { value = JSON.parse(value); } catch { break; }
+    }
+    return value;
+  }
+
+  const encoded = typeof result === "string" ? result : result.raw;
   if (typeof encoded !== "string" || !encoded) return undefined;
   let bytes: Uint8Array;
   try { bytes = Uint8Array.from(atob(encoded), ch => ch.charCodeAt(0)); } catch { return undefined; }
