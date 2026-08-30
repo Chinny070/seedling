@@ -1,9 +1,18 @@
 # Canonical StudioNet deployment
 
-## Pending redeployment (digest preview)
+## Current canonical deployment
 
-Not yet deployed - StudioNet was refusing deployments when this was prepared.
-
+- Network: GenLayer StudioNet
+- Chain ID: `61999`
+- RPC: `https://studio.genlayer.com/api`
+- Contract: `0x29b0e5724EFD1C1BB01666a17F1Ed9f0d0292eac`
+- Owner: `0xaffE15eEc45b68835cc9E5B4Ab85dD5deaE8e70b`
+- Deployment method: manually deployed by the owner in GenLayer Studio
+- Constructor: `Seedling()` with zero arguments
+- Deployed: 2026-08-30
+- Source SHA-256: `d19d767ad243f9037d48a6aa0b98c8ace56f052ca08b364307a7d463d4ad2904`
+  (hashed with LF line endings, as the file is stored in git)
+- Source commit: `a21058e`
 - Public ABI: 57 methods (33 views, 24 writes), zero-argument `Seedling()`
   constructor
 - Adds one method: `preview_evidence_digest(url)`
@@ -30,10 +39,17 @@ count and the first 800 characters. It grants no authority, writes no evidence,
 and mutates no lifecycle state. It enforces the same archive-source rule as
 submission, so a preview can never bless a url that submission would reject.
 
-Verify before pasting into Studio: the source SHA-256 below must match
-`sha256sum contracts/seedling.py`.
+Verified live after deployment: `name: SEEDLING`, `owner` as above,
+`paused: false`, protocol/spec version 1, all eleven counters at zero, and
+empty candidate and policy pages. The deployment transaction hash was not
+supplied and is therefore not asserted here.
 
-## Current canonical deployment
+## Superseded: evidence-integrity deployment
+
+Superseded 2026-08-30 by the deployment above, which adds the digest preview
+the rule needed to be usable. Holds candidate #1 (c-ares), one evidence row,
+and one frozen latent evidence set that can never be adjudicated - the
+rollback that motivated the preview method.
 
 - Network: GenLayer StudioNet
 - Chain ID: `61999`
@@ -281,7 +297,7 @@ other production records merely to populate read results.
 The single frontend configuration path remains
 `VITE_SEEDLING_CONTRACT_ADDRESS`. `frontend/.env.example` contains the canonical
 owner-controlled address, now
-`0xF3626A32B588B9F5Fc68C76ff4abc55f966E6f31`. The Vercel project environment
+`0x29b0e5724EFD1C1BB01666a17F1Ed9f0d0292eac`. The Vercel project environment
 variable must be updated to match and the project rebuilt — the Vite variable is
 inlined at build time, so saving it without a rebuild leaves the old address
 live.
