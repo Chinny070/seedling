@@ -1,4 +1,4 @@
-import { createClient } from "genlayer-js";
+import { abi, createClient } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 
@@ -120,6 +120,27 @@ export async function writeContract(
     onState({ phase: rejected ? "rejected" : "failed", message });
     throw error;
   }
+}
+
+/** Pull a write method's return value out of its finalized receipt.
+ *
+ * Consensus puts the leader's GenVM return value in
+ * consensus_data.leader_receipt[0].result, base64 of calldata-encoded bytes.
+ * Only methods that return something meaningful need this; every other write
+ * ignores the receipt entirely. Returns undefined rather than throwing when the
+ * shape is unfamiliar, so a decoding surprise degrades to "no preview" instead
+ * of breaking submission.
+ */
+export function decodeWriteResult(receipt: unknown): unknown {
+  const encoded = (receipt as { consensus_data?: { leader_receipt?: { result?: string }[] } })
+    ?.consensus_data?.leader_receipt?.[0]?.result;
+  if (typeof encoded !== "string" || !encoded) return undefined;
+  let bytes: Uint8Array;
+  try { bytes = Uint8Array.from(atob(encoded), ch => ch.charCodeAt(0)); } catch { return undefined; }
+  for (const candidate of [bytes, bytes.slice(1), bytes.slice(2)]) {
+    try { return abi.calldata.decode(candidate); } catch { /* try the next framing */ }
+  }
+  return undefined;
 }
 
 export function assertWriteOrder(method: WriteMethod, labels: readonly string[]): boolean {
