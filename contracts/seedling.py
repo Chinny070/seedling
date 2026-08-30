@@ -3870,6 +3870,41 @@ class Seedling(gl.Contract):
         return json.dumps({"family_id": family_id, "versions": out})
 
     # -- introspection: health, versions, counters, and domain vocabulary --
+    # ======================================================================
+    # Submission aid - digest preview (spec: evidence integrity)
+    #
+    # The digest bound to every evidence row is taken from the text this
+    # contract renders, not from the bytes an ordinary HTTP client downloads.
+    # Nothing off-chain reproduces that text reliably, so without this method a
+    # submitter cannot compute the value the protocol will demand: a wrong
+    # digest is accepted at submission, survives the freeze, and only surfaces
+    # as a rollback at adjudication - by which point the evidence set is sealed
+    # and the candidate is spent.
+    #
+    # This makes the requirement checkable in advance. It grants no authority,
+    # writes no evidence, and mutates no lifecycle state; it renders one url and
+    # reports what the digest rules above would produce for it. It is a write
+    # method purely because rendering is nondeterministic and must reach
+    # consensus - a url whose validators disagree is exactly a url that would
+    # have failed adjudication later, so a failure here is a useful answer.
+    # ======================================================================
+    @gl.public.write
+    def preview_evidence_digest(self, url: str) -> str:
+        self._validate_http_url(url, "url")
+        self._require_archive_source(url, "url")
+
+        def render_and_report():
+            page = gl.nondet.web.render(url, mode="text")
+            if not isinstance(page, str):
+                raise gl.vm.UserError("EXPECTED: url did not render as text")
+            return json.dumps({
+                "digest": _render_digest(page),
+                "rendered_chars": len(page),
+                "head": page[:800],
+            })
+
+        return gl.eq_principle.strict_eq(render_and_report)
+
     @gl.public.view
     def get_protocol_info(self) -> str:
         return json.dumps({

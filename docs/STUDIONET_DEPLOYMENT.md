@@ -1,5 +1,38 @@
 # Canonical StudioNet deployment
 
+## Pending redeployment (digest preview)
+
+Not yet deployed - StudioNet was refusing deployments when this was prepared.
+
+- Public ABI: 57 methods (33 views, 24 writes), zero-argument `Seedling()`
+  constructor
+- Adds one method: `preview_evidence_digest(url)`
+
+### Why
+
+The digest binding shipped in the deployment below is correct but unusable. The
+value a submitter must supply as `content_hash` is derived from
+`gl.nondet.web.render(url, mode="text")` - text that nothing off-chain
+reproduces. A wrong digest is accepted at submission, survives the freeze, and
+only surfaces as a rollback at adjudication, at which point the evidence set is
+sealed and the candidate is spent.
+
+That was confirmed in practice, not in theory: candidate #1 (c-ares) on
+`0xF362...6f31` was registered with a digest computed from the archived bytes,
+froze cleanly, and rolled back at `evaluate_latent_value` with
+`EXPECTED: rendered content for evidence 1 does not match its submitted
+digest`. The guard behaved correctly; the requirement was simply not
+satisfiable in advance by anyone, including a reviewing steward.
+
+`preview_evidence_digest` renders one url under strict equality and reports the
+digest the adjudication paths will verify against, plus the rendered character
+count and the first 800 characters. It grants no authority, writes no evidence,
+and mutates no lifecycle state. It enforces the same archive-source rule as
+submission, so a preview can never bless a url that submission would reject.
+
+Verify before pasting into Studio: the source SHA-256 below must match
+`sha256sum contracts/seedling.py`.
+
 ## Current canonical deployment
 
 - Network: GenLayer StudioNet

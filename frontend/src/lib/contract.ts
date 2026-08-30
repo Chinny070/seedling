@@ -55,6 +55,7 @@ export const writeArgs = {
   evaluate_lineage: ["checkpoint_id"] as const, calculate_funding: ["checkpoint_id"] as const,
   open_appeal: ["candidate_id","checkpoint_id","ground","supporting_refs","statement"] as const,
   evaluate_appeal: ["appeal_id"] as const, finalize_checkpoint: ["candidate_id","checkpoint_id"] as const,
+  preview_evidence_digest: ["url"] as const,
 } as const;
 export type WriteMethod = keyof typeof writeArgs;
 
