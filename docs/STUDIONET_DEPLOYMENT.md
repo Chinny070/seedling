@@ -44,6 +44,90 @@ Verified live after deployment: `name: SEEDLING`, `owner` as above,
 empty candidate and policy pages. The deployment transaction hash was not
 supplied and is therefore not asserted here.
 
+## Live lifecycle run (2026-08-30)
+
+The full lifecycle was exercised on the canonical deployment above with real
+evidence and real consensus. Nothing below is simulated.
+
+### Candidate #2 - c-ares - complete, FINALIZED
+
+Bound to observation policy #2 (3 evidence categories, 2 independent sources)
+and funding policy #1.
+
+Evidence, all raw Wayback snapshots with contract-computed digests:
+
+| Category | Origin host |
+| --- | --- |
+| `SOURCE_REPOSITORY` | `raw.githubusercontent.com` (c-ares README) |
+| `PUBLIC_USAGE_RECORD` / `DOWNSTREAM_REPOSITORY` | `nodejs.org`, `raw.githubusercontent.com` (Node.js DNS docs; Node.js licence listing c-ares) |
+| `PACKAGE_REGISTRY` | `packages.debian.org` (libc-ares2) |
+
+Results:
+
+- Latent assessment #2: latent value 8700, independent reuse 9200, ecosystem
+  positioning 9500, gaming risk 1000. Cited Debian packaging and Node.js
+  documentation as cross-organisation adoption. `DISCOVERED` -> `WATCHING`.
+- Checkpoint #2 (2026-01-01 to 2026-06-30), impact verdict #2: `SYSTEMIC`,
+  public value 9500, gaming risk 500.
+- Lineage verdict #1: attribution confidence 9500, split 7000/3000 between the
+  fork maintainers and the original ares author. The adjudicator located the
+  1998 copyright in the licence file and credited the ancestor on that basis,
+  while still awarding the majority to two decades of maintenance.
+- Funding calculation #2: tier `SYSTEMIC`, target 10000 bps, previously
+  recognised 0, newly unlocked 10000, allocated 7000/3000.
+- **Checkpoint #2 FINALIZED**, effective appeal none, effective verdicts #2 and
+  #1, effective funding #2. Candidate is `SYSTEMIC`.
+
+### Candidate #1 - c-ares - stranded, retained deliberately
+
+Registered first under observation policy #1 (1 category, 1 source) with a
+single piece of evidence: the project's own README.
+
+- Impact verdict #1: `WATCHING`, public value 1200, **gaming risk 7200**.
+
+The same project, judged on the same day by the same contract, scored 1200
+against 9500 purely because the evidence was self-published. That is the
+protocol's central claim demonstrated rather than asserted, so this candidate
+is kept, not hidden.
+
+It cannot progress: contribution node 2 carries the wrong digest (a frontend
+desync bug, since fixed - see commit 8793248), so `evaluate_lineage` rolls back
+permanently. Its lineage edge also points from ancestor to descendant, the
+reverse of the intended claim.
+
+### What the digest binding did in practice
+
+Candidate #1's first `evaluate_latent_value` rolled back with
+`EXPECTED: rendered content for evidence 1 does not match its submitted
+digest`, from a digest computed off the archived bytes rather than the rendered
+text. The guard refused to judge unattested content and stored nothing. The
+same call succeeded once the digest came from `preview_evidence_digest`. Both
+directions of the invariant are therefore evidenced on-chain.
+
+### Known issues
+
+1. **Adjudication frequently returns Undetermined and must be re-run.**
+   `evaluate_public_value` needed three attempts on checkpoint #1 and six on
+   checkpoint #2. Investigation of the receipts shows validators re-run the task
+   privately and vote on the leader's verdict; the verdict that eventually
+   survived moved toward what the evidence supported in both cases (down to
+   `WATCHING` on self-published evidence, up to `SYSTEMIC` on corroborated
+   evidence). This appears to be consensus refusing a minority verdict rather
+   than a defect, but it is inferred from which leader answers survived, not
+   proven - validators' private answers are not in the receipt. The UI now says
+   re-running is expected.
+2. **`gl.nondet.web.render` times out on large HTML pages.** The Node.js
+   documentation page failed with `WEBPAGE_LOAD_FAILED` / navigation timeout
+   after previously succeeding. Plain-text sources are reliable; large rendered
+   pages are not. Submitters should prefer raw text where a choice exists.
+3. **Appeals remain unexercised on any deployment.** `evaluate_appeal` carries
+   prompt fixes from two earlier deployments and the UPHOLD-preservation change
+   in commit cf1e8c2, none of which has been run live.
+4. **A second checkpoint has not been run.** Finalization released the
+   checkpoint slot and the UI offers the next period, but the repeat itself is
+   not yet evidenced on-chain. At `SYSTEMIC` with 10000 bps already recognised,
+   a second checkpoint would correctly unlock 0.
+
 ## Superseded: evidence-integrity deployment
 
 Superseded 2026-08-30 by the deployment above, which adds the digest preview
